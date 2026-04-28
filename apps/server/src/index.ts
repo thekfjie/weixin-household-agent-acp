@@ -1,3 +1,4 @@
+import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { buildCodexCommand, previewCodexArgv } from "./codex/index.js";
@@ -22,14 +23,98 @@ function writeSchemaSnapshot(dataDir: string): string {
   return outputPath;
 }
 
-function bootstrap(): void {
+function respondJson(
+  response: http.ServerResponse,
+  statusCode: number,
+  payload: Record<string, unknown>,
+): void {
+  const body = JSON.stringify(payload, null, 2);
+  response.writeHead(statusCode, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Content-Length": Buffer.byteLength(body, "utf8"),
+  });
+  response.end(body);
+}
+
+function createHealthServer(params: {
+  port: number;
+  timezone: string;
+  databaseFile: string;
+  startedAt: string;
+}): http.Server {
+  return http.createServer((request, response) => {
+    const method = request.method ?? "GET";
+    const requestUrl = new URL(request.url ?? "/", "http://127.0.0.1");
+
+    if (method === "GET" && requestUrl.pathname === "/healthz") {
+      respondJson(response, 200, {
+        ok: true,
+        service: "weixin-household-agent-acp",
+        timezone: params.timezone,
+        startedAt: params.startedAt,
+      });
+      return;
+    }
+
+    if (method === "GET" && requestUrl.pathname === "/readyz") {
+      respondJson(response, 200, {
+        ok: true,
+        databaseFile: params.databaseFile,
+      });
+      return;
+    }
+
+    if (method === "GET" && requestUrl.pathname === "/") {
+      respondJson(response, 200, {
+        service: "weixin-household-agent-acp",
+        status: "running",
+        endpoints: ["/healthz", "/readyz"],
+      });
+      return;
+    }
+
+    respondJson(response, 404, {
+      ok: false,
+      error: "not_found",
+      path: requestUrl.pathname,
+    });
+  });
+}
+
+async function listen(server: http.Server, port: number): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, "0.0.0.0", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+}
+
+async function closeServer(server: http.Server): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+
+      resolve();
+    });
+  });
+}
+
+async function bootstrap(): Promise<void> {
   const config = loadConfig();
   ensureDirectory(config.server.dataDir);
+  ensureDirectory(config.codex.admin.workspace);
+  ensureDirectory(config.codex.family.workspace);
 
   const database = new AppDatabase(
     path.join(config.server.dataDir, "weixin-household-agent-acp.sqlite"),
   );
   database.initialize();
+  const startedAt = new Date().toISOString();
 
   const schemaPath = writeSchemaSnapshot(config.server.dataDir);
   const apiClient = new ILinkApiClient({
@@ -97,6 +182,46 @@ function bootstrap(): void {
   console.log(`[bootstrap] codex preview: ${codexPreview.argv.join(" ")} @ ${codexPreview.workspace}`);
   console.log("[bootstrap] filtered output sample:");
   console.log(filteredText);
+
+  const server = createHealthServer({
+    port: config.server.port,
+    timezone: config.server.timezone,
+    databaseFile: database.getFilePath(),
+    startedAt,
+  });
+
+  const shutdown = async (signal: NodeJS.Signals): Promise<void> => {
+    console.log(`[shutdown] received ${signal}`);
+    try {
+      await closeServer(server);
+    } catch (error) {
+      console.error("[shutdown] failed to close http server", error);
+    }
+
+    try {
+      database.close();
+    } catch (error) {
+      console.error("[shutdown] failed to close database", error);
+    }
+
+    process.exit(0);
+  };
+
+  process.once("SIGINT", () => {
+    void shutdown("SIGINT");
+  });
+
+  process.once("SIGTERM", () => {
+    void shutdown("SIGTERM");
+  });
+
+  await listen(server, config.server.port);
+  console.log(
+    `[bootstrap] http server listening on 0.0.0.0:${config.server.port}`,
+  );
 }
 
-bootstrap();
+void bootstrap().catch((error: unknown) => {
+  console.error("[fatal] bootstrap failed", error);
+  process.exit(1);
+});
