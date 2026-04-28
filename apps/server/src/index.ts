@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import http from "node:http";
+import QRCode from "qrcode";
 import { loadConfig } from "./config/index.js";
 import { AppConfig, UserRole } from "./config/types.js";
 import { formatBeijingTime } from "./sessions/index.js";
@@ -58,6 +59,19 @@ function respondPng(
   response.end(buffer);
 }
 
+function respondHtml(
+  response: http.ServerResponse,
+  statusCode: number,
+  html: string,
+): void {
+  response.writeHead(statusCode, {
+    "Content-Type": "text/html; charset=utf-8",
+    "Content-Length": Buffer.byteLength(html, "utf8"),
+    "Cache-Control": "no-store",
+  });
+  response.end(html);
+}
+
 async function readJsonBody(
   request: http.IncomingMessage,
 ): Promise<Record<string, unknown>> {
@@ -100,12 +114,13 @@ interface PendingLoginRecord {
   id: string;
   role: UserRole;
   qrcode: string;
-  qrcodeImageBase64: string;
+  qrcodeContentUrl: string;
   qrcodeFilePath: string;
   status: "waiting" | "scanned" | "confirmed" | "expired" | "failed";
+  refreshCount: number;
   createdAt: string;
   updatedAt: string;
-  error?: string;
+  error?: string | undefined;
   accountId?: string;
   scannedByUserId?: string;
   baseUrl?: string;
@@ -115,6 +130,8 @@ class LoginManager {
   private readonly pending = new Map<string, PendingLoginRecord>();
 
   private readonly qrCodeDir: string;
+
+  private readonly maxRefreshes = 3;
 
   constructor(
     private readonly config: AppConfig,
@@ -146,15 +163,17 @@ class LoginManager {
       scannedByUserId: record.scannedByUserId ?? null,
       baseUrl: record.baseUrl ?? null,
       error: record.error ?? null,
+      refreshCount: record.refreshCount,
+      qrcodeContentUrl: record.qrcodeContentUrl,
+      qrcodeViewUrl: `/api/logins/${encodeURIComponent(record.id)}/view`,
       qrcodeImageUrl: `/api/logins/${encodeURIComponent(record.id)}/qrcode.png`,
-      qrcodeDataUrl: `data:image/png;base64,${record.qrcodeImageBase64}`,
       qrcodeFilePath: record.qrcodeFilePath,
     };
   }
 
   private updateRecord(
     loginId: string,
-    patch: Partial<PendingLoginRecord>,
+    patch: Partial<PendingLoginRecord> & { error?: string | undefined },
   ): PendingLoginRecord {
     const current = this.pending.get(loginId);
     if (!current) {
@@ -174,11 +193,14 @@ class LoginManager {
     const client = this.createClient();
 
     try {
-      for (let attempt = 1; attempt <= 180; attempt += 1) {
-        const status = await client.pollQRCodeStatus(record.qrcode);
-        await this.handleQrStatus(record.id, status);
+      let attempt = 0;
 
-        if (status.status === "confirmed" || status.status === "expired") {
+      while (attempt < 180) {
+        attempt += 1;
+        const status = await client.pollQRCodeStatus(record.qrcode);
+        const shouldStop = await this.handleQrStatus(record.id, status, client);
+
+        if (shouldStop) {
           return;
         }
 
@@ -200,25 +222,33 @@ class LoginManager {
   private async handleQrStatus(
     loginId: string,
     status: ILinkQrCodeStatusResponse,
-  ): Promise<void> {
+    client: ILinkApiClient,
+  ): Promise<boolean> {
     const summarized = summarizeQrStatus(status);
 
     if (summarized === "waiting") {
       this.updateRecord(loginId, { status: "waiting" });
-      return;
+      return false;
     }
 
     if (summarized === "scanned") {
       this.updateRecord(loginId, { status: "scanned" });
-      return;
+      return false;
     }
 
     if (summarized === "expired") {
+      const current = this.get(loginId);
+      if (current && current.refreshCount < this.maxRefreshes) {
+        const nextQrCode = await client.getQRCode();
+        await this.replaceQrCode(loginId, nextQrCode, current.refreshCount + 1);
+        return false;
+      }
+
       this.updateRecord(loginId, {
         status: "expired",
         error: "QR code expired before confirmation",
       });
-      return;
+      return true;
     }
 
     if (
@@ -244,13 +274,14 @@ class LoginManager {
           ? { scannedByUserId: status.ilink_user_id }
           : {}),
       });
-      return;
+      return true;
     }
 
     this.updateRecord(loginId, {
       status: "failed",
       error: `Unexpected QR status payload: ${JSON.stringify(status)}`,
     });
+    return true;
   }
 
   async create(role: UserRole): Promise<Record<string, unknown>> {
@@ -259,15 +290,16 @@ class LoginManager {
     const loginId = crypto.randomUUID();
     const qrcodeFilePath = path.join(this.qrCodeDir, `${loginId}.png`);
 
-    this.writeQrCodeFile(qrCode, qrcodeFilePath);
+    await this.writeQrCodeFile(qrCode, qrcodeFilePath);
 
     const record: PendingLoginRecord = {
       id: loginId,
       role,
       qrcode: qrCode.qrcode,
-      qrcodeImageBase64: qrCode.qrcode_img_content,
+      qrcodeContentUrl: qrCode.qrcode_img_content,
       qrcodeFilePath,
       status: "waiting",
+      refreshCount: 0,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -292,14 +324,46 @@ class LoginManager {
       return undefined;
     }
 
-    return Buffer.from(record.qrcodeImageBase64, "base64");
+    return fs.existsSync(record.qrcodeFilePath)
+      ? fs.readFileSync(record.qrcodeFilePath)
+      : undefined;
   }
 
-  private writeQrCodeFile(
+  private async replaceQrCode(
+    loginId: string,
+    qrCode: ILinkQrCodeResponse,
+    refreshCount: number,
+  ): Promise<void> {
+    const record = this.get(loginId);
+    if (!record) {
+      return;
+    }
+
+    await this.writeQrCodeFile(qrCode, record.qrcodeFilePath);
+    const nextPatch: Partial<PendingLoginRecord> & {
+      error?: string | undefined;
+    } = {
+      qrcode: qrCode.qrcode,
+      qrcodeContentUrl: qrCode.qrcode_img_content,
+      status: "waiting",
+      refreshCount,
+    };
+
+    nextPatch.error = undefined;
+    this.updateRecord(loginId, nextPatch);
+  }
+
+  private async writeQrCodeFile(
     qrCode: ILinkQrCodeResponse,
     filePath: string,
-  ): void {
-    fs.writeFileSync(filePath, Buffer.from(qrCode.qrcode_img_content, "base64"));
+  ): Promise<void> {
+    const buffer = await QRCode.toBuffer(qrCode.qrcode_img_content, {
+      type: "png",
+      errorCorrectionLevel: "M",
+      margin: 1,
+      width: 320,
+    });
+    fs.writeFileSync(filePath, buffer);
   }
 }
 
@@ -384,6 +448,117 @@ function createHealthServer(params: {
         method === "GET" &&
         segments[0] === "api" &&
         segments[1] === "logins" &&
+        segments[3] === "view"
+      ) {
+        const loginId = decodeURIComponent(segments[2] ?? "");
+        const login = params.loginManager.serializeById(loginId);
+        if (!login) {
+          respondJson(response, 404, {
+            ok: false,
+            error: "login_not_found",
+          });
+          return;
+        }
+
+        const html = `<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>微信扫码登录</title>
+    <style>
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        margin: 0;
+        padding: 32px 20px;
+        background: #f5f7fb;
+        color: #1f2937;
+      }
+      .wrap {
+        max-width: 480px;
+        margin: 0 auto;
+        background: #ffffff;
+        border-radius: 12px;
+        padding: 24px;
+        box-shadow: 0 12px 30px rgba(15, 23, 42, 0.08);
+      }
+      h1 {
+        margin: 0 0 12px;
+        font-size: 22px;
+      }
+      p {
+        line-height: 1.6;
+        margin: 8px 0;
+      }
+      img {
+        display: block;
+        width: 320px;
+        max-width: 100%;
+        margin: 20px auto;
+        border: 1px solid #e5e7eb;
+        border-radius: 8px;
+        background: #fff;
+      }
+      code {
+        font-size: 13px;
+        background: #f3f4f6;
+        padding: 2px 6px;
+        border-radius: 6px;
+      }
+      .status {
+        font-weight: 600;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>微信扫码登录</h1>
+      <p>登录任务：<code>${loginId}</code></p>
+      <p>角色：<span id="role">${String(login.role ?? "family")}</span></p>
+      <p>状态：<span class="status" id="status">${String(login.status ?? "waiting")}</span></p>
+      <img id="qrcode" src="/api/logins/${encodeURIComponent(loginId)}/qrcode.png?ts=${Date.now()}" alt="微信登录二维码" />
+      <p id="hint">如果二维码过期，这个页面会自动刷新。</p>
+    </div>
+    <script>
+      const loginId = ${JSON.stringify(loginId)};
+      const statusEl = document.getElementById("status");
+      const hintEl = document.getElementById("hint");
+      const imageEl = document.getElementById("qrcode");
+
+      async function refreshStatus() {
+        try {
+          const response = await fetch("/api/logins/" + encodeURIComponent(loginId), { cache: "no-store" });
+          const payload = await response.json();
+          const login = payload.login || {};
+          statusEl.textContent = login.status || "unknown";
+          if (login.error) {
+            hintEl.textContent = login.error;
+          }
+          if (login.status === "waiting" || login.status === "scanned") {
+            imageEl.src = "/api/logins/" + encodeURIComponent(loginId) + "/qrcode.png?ts=" + Date.now();
+          }
+          if (login.status === "confirmed") {
+            hintEl.textContent = "登录成功，可以回到终端继续下一步。";
+          }
+        } catch (error) {
+          hintEl.textContent = "状态刷新失败，请稍后手动刷新页面。";
+        }
+      }
+
+      setInterval(refreshStatus, 3000);
+      refreshStatus();
+    </script>
+  </body>
+</html>`;
+
+        respondHtml(response, 200, html);
+        return;
+      }
+
+      if (
+        method === "GET" &&
+        segments[0] === "api" &&
+        segments[1] === "logins" &&
         segments[3] === "qrcode.png"
       ) {
         const buffer = params.loginManager.getQrCodeBuffer(
@@ -436,6 +611,7 @@ function createHealthServer(params: {
             "/api/accounts",
             "/api/logins",
             "/api/logins/:id",
+            "/api/logins/:id/view",
             "/api/logins/:id/qrcode.png",
             "/api/accounts/:id/role",
           ],
