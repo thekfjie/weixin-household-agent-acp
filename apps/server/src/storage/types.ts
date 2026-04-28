@@ -6,6 +6,7 @@ export interface WechatAccountRecord {
   role: UserRole;
   authToken: string;
   uin: string;
+  baseUrl?: string;
   status: string;
   createdAt: string;
   updatedAt: string;
@@ -19,6 +20,7 @@ export interface SessionRecord {
   status: string;
   summaryText: string;
   memoryJson: string;
+  contextToken: string;
   lastActiveAt: string;
   createdAt: string;
   updatedAt: string;

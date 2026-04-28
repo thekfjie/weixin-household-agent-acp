@@ -1,17 +1,22 @@
-import http from "node:http";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { buildCodexCommand, previewCodexArgv } from "./codex/index.js";
+import http from "node:http";
 import { loadConfig } from "./config/index.js";
-import { filterFamilyOutput } from "./policy/index.js";
-import { resolveRole } from "./router/index.js";
+import { AppConfig, UserRole } from "./config/types.js";
+import { formatBeijingTime } from "./sessions/index.js";
 import {
-  buildPromptContext,
-  ensureActiveSession,
-  shouldRotateSession,
-} from "./sessions/index.js";
-import { AppDatabase, SQLITE_SCHEMA } from "./storage/index.js";
-import { ILinkApiClient } from "./transport/index.js";
+  AppDatabase,
+  SQLITE_SCHEMA,
+  WechatAccountRecord,
+} from "./storage/index.js";
+import {
+  ILinkApiClient,
+  ILinkQrCodeResponse,
+  ILinkQrCodeStatusResponse,
+  summarizeQrStatus,
+  WechatWorker,
+} from "./transport/index.js";
 
 function ensureDirectory(target: string): void {
   fs.mkdirSync(target, { recursive: true });
@@ -21,6 +26,10 @@ function writeSchemaSnapshot(dataDir: string): string {
   const outputPath = path.join(dataDir, "schema.sql");
   fs.writeFileSync(outputPath, SQLITE_SCHEMA, "utf8");
   return outputPath;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function respondJson(
@@ -36,48 +45,416 @@ function respondJson(
   response.end(body);
 }
 
+function respondPng(
+  response: http.ServerResponse,
+  statusCode: number,
+  buffer: Buffer,
+): void {
+  response.writeHead(statusCode, {
+    "Content-Type": "image/png",
+    "Content-Length": buffer.length,
+    "Cache-Control": "no-store",
+  });
+  response.end(buffer);
+}
+
+async function readJsonBody(
+  request: http.IncomingMessage,
+): Promise<Record<string, unknown>> {
+  const chunks: Buffer[] = [];
+
+  for await (const chunk of request) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+
+  if (chunks.length === 0) {
+    return {};
+  }
+
+  const raw = Buffer.concat(chunks).toString("utf8").trim();
+  if (!raw) {
+    return {};
+  }
+
+  return JSON.parse(raw) as Record<string, unknown>;
+}
+
+function isUserRole(value: unknown): value is UserRole {
+  return value === "admin" || value === "family";
+}
+
+function sanitizeAccountRecord(account: WechatAccountRecord): Record<string, unknown> {
+  return {
+    id: account.id,
+    displayName: account.displayName ?? null,
+    role: account.role,
+    uin: account.uin,
+    baseUrl: account.baseUrl ?? null,
+    status: account.status,
+    createdAt: account.createdAt,
+    updatedAt: account.updatedAt,
+  };
+}
+
+interface PendingLoginRecord {
+  id: string;
+  role: UserRole;
+  qrcode: string;
+  qrcodeImageBase64: string;
+  qrcodeFilePath: string;
+  status: "waiting" | "scanned" | "confirmed" | "expired" | "failed";
+  createdAt: string;
+  updatedAt: string;
+  error?: string;
+  accountId?: string;
+  scannedByUserId?: string;
+  baseUrl?: string;
+}
+
+class LoginManager {
+  private readonly pending = new Map<string, PendingLoginRecord>();
+
+  private readonly qrCodeDir: string;
+
+  constructor(
+    private readonly config: AppConfig,
+    private readonly database: AppDatabase,
+  ) {
+    this.qrCodeDir = path.join(config.server.dataDir, "qrcodes");
+    ensureDirectory(this.qrCodeDir);
+  }
+
+  private createClient(): ILinkApiClient {
+    return new ILinkApiClient({
+      baseUrl: this.config.wechat.apiBaseUrl,
+      cdnBaseUrl: this.config.wechat.cdnBaseUrl,
+      channelVersion: this.config.wechat.channelVersion,
+      ...(this.config.wechat.routeTag
+        ? { routeTag: this.config.wechat.routeTag }
+        : {}),
+    });
+  }
+
+  private serialize(record: PendingLoginRecord): Record<string, unknown> {
+    return {
+      id: record.id,
+      role: record.role,
+      status: record.status,
+      createdAt: record.createdAt,
+      updatedAt: record.updatedAt,
+      accountId: record.accountId ?? null,
+      scannedByUserId: record.scannedByUserId ?? null,
+      baseUrl: record.baseUrl ?? null,
+      error: record.error ?? null,
+      qrcodeImageUrl: `/api/logins/${encodeURIComponent(record.id)}/qrcode.png`,
+      qrcodeDataUrl: `data:image/png;base64,${record.qrcodeImageBase64}`,
+      qrcodeFilePath: record.qrcodeFilePath,
+    };
+  }
+
+  private updateRecord(
+    loginId: string,
+    patch: Partial<PendingLoginRecord>,
+  ): PendingLoginRecord {
+    const current = this.pending.get(loginId);
+    if (!current) {
+      throw new Error(`Login session not found: ${loginId}`);
+    }
+
+    const updated: PendingLoginRecord = {
+      ...current,
+      ...patch,
+      updatedAt: new Date().toISOString(),
+    };
+    this.pending.set(loginId, updated);
+    return updated;
+  }
+
+  private async monitorLogin(record: PendingLoginRecord): Promise<void> {
+    const client = this.createClient();
+
+    try {
+      for (let attempt = 1; attempt <= 180; attempt += 1) {
+        const status = await client.pollQRCodeStatus(record.qrcode);
+        await this.handleQrStatus(record.id, status);
+
+        if (status.status === "confirmed" || status.status === "expired") {
+          return;
+        }
+
+        await sleep(1_000);
+      }
+
+      this.updateRecord(record.id, {
+        status: "failed",
+        error: "QR login confirmation timed out",
+      });
+    } catch (error) {
+      this.updateRecord(record.id, {
+        status: "failed",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private async handleQrStatus(
+    loginId: string,
+    status: ILinkQrCodeStatusResponse,
+  ): Promise<void> {
+    const summarized = summarizeQrStatus(status);
+
+    if (summarized === "waiting") {
+      this.updateRecord(loginId, { status: "waiting" });
+      return;
+    }
+
+    if (summarized === "scanned") {
+      this.updateRecord(loginId, { status: "scanned" });
+      return;
+    }
+
+    if (summarized === "expired") {
+      this.updateRecord(loginId, {
+        status: "expired",
+        error: "QR code expired before confirmation",
+      });
+      return;
+    }
+
+    if (
+      summarized === "confirmed" &&
+      status.bot_token &&
+      status.ilink_bot_id &&
+      status.baseurl
+    ) {
+      this.database.saveAccount({
+        id: status.ilink_bot_id,
+        role: this.get(loginId)?.role ?? "family",
+        authToken: status.bot_token,
+        uin: status.ilink_user_id ?? status.ilink_bot_id,
+        baseUrl: status.baseurl,
+        status: "active",
+      });
+
+      this.updateRecord(loginId, {
+        status: "confirmed",
+        accountId: status.ilink_bot_id,
+        baseUrl: status.baseurl,
+        ...(status.ilink_user_id
+          ? { scannedByUserId: status.ilink_user_id }
+          : {}),
+      });
+      return;
+    }
+
+    this.updateRecord(loginId, {
+      status: "failed",
+      error: `Unexpected QR status payload: ${JSON.stringify(status)}`,
+    });
+  }
+
+  async create(role: UserRole): Promise<Record<string, unknown>> {
+    const client = this.createClient();
+    const qrCode = await client.getQRCode();
+    const loginId = crypto.randomUUID();
+    const qrcodeFilePath = path.join(this.qrCodeDir, `${loginId}.png`);
+
+    this.writeQrCodeFile(qrCode, qrcodeFilePath);
+
+    const record: PendingLoginRecord = {
+      id: loginId,
+      role,
+      qrcode: qrCode.qrcode,
+      qrcodeImageBase64: qrCode.qrcode_img_content,
+      qrcodeFilePath,
+      status: "waiting",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    this.pending.set(loginId, record);
+    void this.monitorLogin(record);
+    return this.serialize(record);
+  }
+
+  get(loginId: string): PendingLoginRecord | undefined {
+    return this.pending.get(loginId);
+  }
+
+  serializeById(loginId: string): Record<string, unknown> | undefined {
+    const record = this.pending.get(loginId);
+    return record ? this.serialize(record) : undefined;
+  }
+
+  getQrCodeBuffer(loginId: string): Buffer | undefined {
+    const record = this.pending.get(loginId);
+    if (!record) {
+      return undefined;
+    }
+
+    return Buffer.from(record.qrcodeImageBase64, "base64");
+  }
+
+  private writeQrCodeFile(
+    qrCode: ILinkQrCodeResponse,
+    filePath: string,
+  ): void {
+    fs.writeFileSync(filePath, Buffer.from(qrCode.qrcode_img_content, "base64"));
+  }
+}
+
 function createHealthServer(params: {
-  port: number;
-  timezone: string;
-  databaseFile: string;
+  config: AppConfig;
+  database: AppDatabase;
+  loginManager: LoginManager;
   startedAt: string;
 }): http.Server {
-  return http.createServer((request, response) => {
+  return http.createServer(async (request, response) => {
     const method = request.method ?? "GET";
     const requestUrl = new URL(request.url ?? "/", "http://127.0.0.1");
+    const pathname = requestUrl.pathname;
+    const segments = pathname.split("/").filter(Boolean);
 
-    if (method === "GET" && requestUrl.pathname === "/healthz") {
-      respondJson(response, 200, {
-        ok: true,
-        service: "weixin-household-agent-acp",
-        timezone: params.timezone,
-        startedAt: params.startedAt,
+    try {
+      if (method === "GET" && pathname === "/healthz") {
+        respondJson(response, 200, {
+          ok: true,
+          service: "weixin-household-agent-acp",
+          timezone: params.config.server.timezone,
+          startedAt: params.startedAt,
+        });
+        return;
+      }
+
+      if (method === "GET" && pathname === "/readyz") {
+        respondJson(response, 200, {
+          ok: true,
+          databaseFile: params.database.getFilePath(),
+          accounts: params.database.listAccounts().length,
+        });
+        return;
+      }
+
+      if (method === "GET" && pathname === "/api/accounts") {
+        respondJson(response, 200, {
+          ok: true,
+          accounts: params.database
+            .listAccounts()
+            .map(sanitizeAccountRecord),
+        });
+        return;
+      }
+
+      if (method === "POST" && pathname === "/api/logins") {
+        const body = await readJsonBody(request);
+        const role = isUserRole(body.role) ? body.role : "family";
+        const created = await params.loginManager.create(role);
+        respondJson(response, 201, {
+          ok: true,
+          login: created,
+        });
+        return;
+      }
+
+      if (
+        method === "GET" &&
+        segments[0] === "api" &&
+        segments[1] === "logins" &&
+        segments.length === 3
+      ) {
+        const login = params.loginManager.serializeById(
+          decodeURIComponent(segments[2] ?? ""),
+        );
+        if (!login) {
+          respondJson(response, 404, {
+            ok: false,
+            error: "login_not_found",
+          });
+          return;
+        }
+
+        respondJson(response, 200, {
+          ok: true,
+          login,
+        });
+        return;
+      }
+
+      if (
+        method === "GET" &&
+        segments[0] === "api" &&
+        segments[1] === "logins" &&
+        segments[3] === "qrcode.png"
+      ) {
+        const buffer = params.loginManager.getQrCodeBuffer(
+          decodeURIComponent(segments[2] ?? ""),
+        );
+        if (!buffer) {
+          respondJson(response, 404, {
+            ok: false,
+            error: "login_not_found",
+          });
+          return;
+        }
+
+        respondPng(response, 200, buffer);
+        return;
+      }
+
+      if (
+        method === "POST" &&
+        segments[0] === "api" &&
+        segments[1] === "accounts" &&
+        segments[3] === "role"
+      ) {
+        const accountId = decodeURIComponent(segments[2] ?? "");
+        const body = await readJsonBody(request);
+        if (!isUserRole(body.role)) {
+          respondJson(response, 400, {
+            ok: false,
+            error: "invalid_role",
+          });
+          return;
+        }
+
+        const updated = params.database.updateAccountRole(accountId, body.role);
+        respondJson(response, 200, {
+          ok: true,
+          account: sanitizeAccountRecord(updated),
+        });
+        return;
+      }
+
+      if (method === "GET" && pathname === "/") {
+        respondJson(response, 200, {
+          service: "weixin-household-agent-acp",
+          status: "running",
+          time: formatBeijingTime(new Date()),
+          endpoints: [
+            "/healthz",
+            "/readyz",
+            "/api/accounts",
+            "/api/logins",
+            "/api/logins/:id",
+            "/api/logins/:id/qrcode.png",
+            "/api/accounts/:id/role",
+          ],
+        });
+        return;
+      }
+
+      respondJson(response, 404, {
+        ok: false,
+        error: "not_found",
+        path: pathname,
       });
-      return;
-    }
-
-    if (method === "GET" && requestUrl.pathname === "/readyz") {
-      respondJson(response, 200, {
-        ok: true,
-        databaseFile: params.databaseFile,
+    } catch (error) {
+      respondJson(response, 500, {
+        ok: false,
+        error: "internal_error",
+        message: error instanceof Error ? error.message : String(error),
       });
-      return;
     }
-
-    if (method === "GET" && requestUrl.pathname === "/") {
-      respondJson(response, 200, {
-        service: "weixin-household-agent-acp",
-        status: "running",
-        endpoints: ["/healthz", "/readyz"],
-      });
-      return;
-    }
-
-    respondJson(response, 404, {
-      ok: false,
-      error: "not_found",
-      path: requestUrl.pathname,
-    });
   });
 }
 
@@ -115,58 +492,14 @@ async function bootstrap(): Promise<void> {
   );
   database.initialize();
   const startedAt = new Date().toISOString();
-
   const schemaPath = writeSchemaSnapshot(config.server.dataDir);
-  const apiClient = new ILinkApiClient({
-    baseUrl: config.wechat.apiBaseUrl,
-    cdnBaseUrl: config.wechat.cdnBaseUrl,
-    channelVersion: config.wechat.channelVersion,
-    ...(config.wechat.routeTag ? { routeTag: config.wechat.routeTag } : {}),
-  });
-  const route = resolveRole({ configuredRole: "family" });
-  const session = ensureActiveSession({
+
+  const loginManager = new LoginManager(config, database);
+  const worker = new WechatWorker({
+    config,
     database,
-    wechatAccountId: "demo-account@im.bot",
-    contactId: "demo-contact",
-    role: route.role,
   });
-  const rotationDecision = shouldRotateSession({
-    lastActiveAt: session.lastActiveAt,
-  });
-  const promptContext = buildPromptContext({
-    role: route.role,
-    now: new Date(),
-    summary: {
-      summary:
-        "\u7528\u6237\u6700\u8fd1\u4e3b\u8981\u5728\u6d4b\u8bd5\u5bb6\u5ead\u5fae\u4fe1 AI \u52a9\u624b\u7684\u6574\u4f53\u80fd\u529b\u3002",
-      facts: [
-        "\u6240\u6709\u65f6\u95f4\u7edf\u4e00\u6309\u5317\u4eac\u65f6\u95f4\u89e3\u91ca",
-        "\u666e\u901a\u5bb6\u5ead\u6210\u5458\u4e0d\u9700\u8981\u81ea\u5df1\u5207\u4f1a\u8bdd",
-      ],
-      openLoops: [
-        "\u5b9e\u73b0\u591a\u8d26\u53f7\u3001\u6587\u4ef6\u53d1\u9001\u3001\u81ea\u52a8\u6458\u8981",
-      ],
-      lastActiveAt: "2026-04-28 20:15 CST",
-    },
-  });
-
-  const promptPreview = [
-    promptContext.currentTimeText,
-    promptContext.assistantInstruction,
-    promptContext.summaryBlock,
-    "\u7528\u6237\u6d88\u606f\uff1a\u5e2e\u6211\u6574\u7406\u4e00\u4e2a\u62a5\u9500\u6a21\u677f\uff0c\u6700\u597d\u80fd\u751f\u6210\u6587\u4ef6\u3002",
-  ]
-    .filter(Boolean)
-    .join("\n\n");
-
-  const codexPreview = previewCodexArgv(
-    buildCodexCommand(config.codex.family, promptPreview),
-  );
-
-  const filteredText = filterFamilyOutput(
-    "\u5206\u6790\uff1a\u5148\u68c0\u67e5\u76ee\u5f55\u3002\nsudo systemctl status foo\n\u8fd9\u662f\u7ed9\u7528\u6237\u7684\u6b63\u5e38\u7b54\u590d\u3002",
-    config.familyPolicy,
-  );
+  worker.start();
 
   console.log("[bootstrap] service initialized");
   console.log(`[bootstrap] port: ${config.server.port}`);
@@ -174,28 +507,34 @@ async function bootstrap(): Promise<void> {
   console.log(`[bootstrap] data dir: ${config.server.dataDir}`);
   console.log(`[bootstrap] db file: ${database.getFilePath()}`);
   console.log(`[bootstrap] schema snapshot: ${schemaPath}`);
-  console.log(`[bootstrap] ilink api base: ${apiClient.baseUrl}`);
-  console.log(`[bootstrap] ilink cdn base: ${apiClient.cdnBaseUrl}`);
-  console.log(`[bootstrap] family route reason: ${route.reason}`);
-  console.log(`[bootstrap] session id: ${session.id}`);
-  console.log(`[bootstrap] session rotation check: ${rotationDecision.reason}`);
-  console.log(`[bootstrap] codex preview: ${codexPreview.argv.join(" ")} @ ${codexPreview.workspace}`);
-  console.log("[bootstrap] filtered output sample:");
-  console.log(filteredText);
+  console.log(`[bootstrap] worker accounts: ${database.listAccounts().length}`);
+  console.log(
+    `[bootstrap] admin workspace: ${config.codex.admin.workspace}`,
+  );
+  console.log(
+    `[bootstrap] family workspace: ${config.codex.family.workspace}`,
+  );
 
   const server = createHealthServer({
-    port: config.server.port,
-    timezone: config.server.timezone,
-    databaseFile: database.getFilePath(),
+    config,
+    database,
+    loginManager,
     startedAt,
   });
 
   const shutdown = async (signal: NodeJS.Signals): Promise<void> => {
     console.log(`[shutdown] received ${signal}`);
+
     try {
       await closeServer(server);
     } catch (error) {
       console.error("[shutdown] failed to close http server", error);
+    }
+
+    try {
+      await worker.stop();
+    } catch (error) {
+      console.error("[shutdown] failed to stop worker", error);
     }
 
     try {

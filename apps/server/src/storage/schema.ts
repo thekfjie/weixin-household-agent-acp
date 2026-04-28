@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS wechat_accounts (
   role TEXT NOT NULL CHECK(role IN ('admin', 'family')),
   auth_token TEXT NOT NULL,
   uin TEXT NOT NULL,
+  base_url TEXT,
   status TEXT NOT NULL DEFAULT 'active',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -34,6 +35,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   status TEXT NOT NULL DEFAULT 'active',
   summary_text TEXT NOT NULL DEFAULT '',
   memory_json TEXT NOT NULL DEFAULT '{}',
+  context_token TEXT NOT NULL DEFAULT '',
   last_active_at TEXT NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL

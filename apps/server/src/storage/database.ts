@@ -24,6 +24,7 @@ function toAccountRecord(row: Record<string, unknown>): WechatAccountRecord {
     role: String(row.role) as UserRole,
     authToken: String(row.auth_token),
     uin: String(row.uin),
+    ...(row.base_url ? { baseUrl: String(row.base_url) } : {}),
     status: String(row.status),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
@@ -39,6 +40,7 @@ function toSessionRecord(row: Record<string, unknown>): SessionRecord {
     status: String(row.status),
     summaryText: String(row.summary_text),
     memoryJson: String(row.memory_json),
+    contextToken: String(row.context_token ?? ""),
     lastActiveAt: String(row.last_active_at),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
@@ -57,6 +59,7 @@ export class AppDatabase {
     this.db.exec("PRAGMA journal_mode = WAL;");
     this.db.exec("PRAGMA foreign_keys = ON;");
     this.db.exec(SQLITE_SCHEMA);
+    this.ensureLegacyColumns();
   }
 
   close(): void {
@@ -65,6 +68,33 @@ export class AppDatabase {
 
   getFilePath(): string {
     return this.filePath;
+  }
+
+  private ensureLegacyColumns(): void {
+    this.ensureColumn("wechat_accounts", "base_url", "TEXT");
+    this.ensureColumn(
+      "sessions",
+      "context_token",
+      "TEXT NOT NULL DEFAULT ''",
+    );
+  }
+
+  private ensureColumn(
+    tableName: string,
+    columnName: string,
+    columnDefinition: string,
+  ): void {
+    const rows = this.db
+      .prepare(`PRAGMA table_info(${tableName})`)
+      .all() as Array<{ name?: string }>;
+    const exists = rows.some((row) => row.name === columnName);
+    if (exists) {
+      return;
+    }
+
+    this.db.exec(
+      `ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnDefinition};`,
+    );
   }
 
   listAccounts(): WechatAccountRecord[] {
@@ -89,6 +119,7 @@ export class AppDatabase {
     role: UserRole;
     authToken: string;
     uin: string;
+    baseUrl?: string;
     status?: string;
   }): WechatAccountRecord {
     const now = createNow();
@@ -98,13 +129,14 @@ export class AppDatabase {
       .prepare(
         `
         INSERT INTO wechat_accounts (
-          id, display_name, role, auth_token, uin, status, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          id, display_name, role, auth_token, uin, base_url, status, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           display_name = excluded.display_name,
           role = excluded.role,
           auth_token = excluded.auth_token,
           uin = excluded.uin,
+          base_url = excluded.base_url,
           status = excluded.status,
           updated_at = excluded.updated_at
         `,
@@ -115,6 +147,7 @@ export class AppDatabase {
         input.role,
         input.authToken,
         input.uin,
+        input.baseUrl ?? null,
         input.status ?? "active",
         existing?.createdAt ?? now,
         now,
@@ -126,6 +159,30 @@ export class AppDatabase {
     }
 
     return saved;
+  }
+
+  updateAccountRole(accountId: string, role: UserRole): WechatAccountRecord {
+    const existing = this.getAccountById(accountId);
+    if (!existing) {
+      throw new Error(`Account not found: ${accountId}`);
+    }
+
+    this.db
+      .prepare(
+        `
+        UPDATE wechat_accounts
+        SET role = ?, updated_at = ?
+        WHERE id = ?
+        `,
+      )
+      .run(role, createNow(), accountId);
+
+    const updated = this.getAccountById(accountId);
+    if (!updated) {
+      throw new Error(`Failed to update account role: ${accountId}`);
+    }
+
+    return updated;
   }
 
   getPollingCursor(accountId: string): string | undefined {
@@ -177,6 +234,7 @@ export class AppDatabase {
     status?: string;
     summaryText?: string;
     memoryJson?: string;
+    contextToken?: string;
     lastActiveAt?: string;
   }): SessionRecord {
     const now = createNow();
@@ -189,13 +247,14 @@ export class AppDatabase {
         `
         INSERT INTO sessions (
           id, wechat_account_id, contact_id, role, status, summary_text,
-          memory_json, last_active_at, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          memory_json, context_token, last_active_at, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           role = excluded.role,
           status = excluded.status,
           summary_text = excluded.summary_text,
           memory_json = excluded.memory_json,
+          context_token = excluded.context_token,
           last_active_at = excluded.last_active_at,
           updated_at = excluded.updated_at
         `,
@@ -208,6 +267,7 @@ export class AppDatabase {
         input.status ?? "active",
         input.summaryText ?? "",
         input.memoryJson ?? "{}",
+        input.contextToken ?? "",
         input.lastActiveAt ?? now,
         existing?.created_at ?? now,
         now,
@@ -243,5 +303,31 @@ export class AppDatabase {
         input.createdAt,
         input.sourceMessageId ?? null,
       );
+  }
+
+  listSessionMessages(sessionId: string, limit = 10): MessageRecord[] {
+    const rows = this.db
+      .prepare(
+        `
+        SELECT * FROM messages
+        WHERE session_id = ?
+        ORDER BY created_at DESC
+        LIMIT ?
+        `,
+      )
+      .all(sessionId, limit) as Array<Record<string, unknown>>;
+
+    return rows.map((row) => ({
+      id: String(row.id),
+      sessionId: String(row.session_id),
+      direction: String(row.direction) as "inbound" | "outbound",
+      messageType: String(row.message_type),
+      ...(row.text_content ? { textContent: String(row.text_content) } : {}),
+      ...(row.file_path ? { filePath: String(row.file_path) } : {}),
+      createdAt: String(row.created_at),
+      ...(row.source_message_id
+        ? { sourceMessageId: String(row.source_message_id) }
+        : {}),
+    }));
   }
 }
