@@ -1,13 +1,9 @@
-import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { loadConfig } from "./config/index.js";
 import { AppDatabase, SessionRecord } from "./storage/index.js";
 import { ILinkApiClient } from "./transport/index.js";
-import {
-  sendUploadedFileMessage,
-  uploadLocalMedia,
-} from "./transport/ilink/media.js";
+import { sendLocalFileToSession } from "./files/index.js";
 
 interface CliOptions {
   filePath?: string;
@@ -101,30 +97,6 @@ function parseArgs(argv: string[]): CliOptions {
   }
 
   return options;
-}
-
-function inferMimeType(filePath: string): string {
-  const extension = path.extname(filePath).toLowerCase();
-  const known: Record<string, string> = {
-    ".txt": "text/plain",
-    ".md": "text/markdown",
-    ".csv": "text/csv",
-    ".json": "application/json",
-    ".pdf": "application/pdf",
-    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-    ".zip": "application/zip",
-    ".png": "image/png",
-    ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg",
-  };
-
-  return known[extension] ?? "application/octet-stream";
-}
-
-function createClientId(prefix: string): string {
-  return `${prefix}-${crypto.randomUUID()}`;
 }
 
 function printSessions(sessions: SessionRecord[]): void {
@@ -221,17 +193,6 @@ async function run(): Promise<void> {
       throw new Error(`账号不可用：${session.wechatAccountId}`);
     }
 
-    const attachmentId = createClientId("attachment");
-    database.saveAttachment({
-      id: attachmentId,
-      sessionId: session.id,
-      localPath: filePath,
-      mimeType: inferMimeType(filePath),
-      fileName: path.basename(filePath),
-      sizeBytes: stat.size,
-      outboundStatus: "uploading",
-    });
-
     const client = new ILinkApiClient({
       baseUrl: account.baseUrl ?? config.wechat.apiBaseUrl,
       cdnBaseUrl: config.wechat.cdnBaseUrl,
@@ -241,28 +202,12 @@ async function run(): Promise<void> {
     });
 
     try {
-      const uploaded = await uploadLocalMedia({
+      const result = await sendLocalFileToSession({
         client,
+        database,
+        session,
         filePath,
-        toUserId: session.contactId,
-      });
-      const clientId = await sendUploadedFileMessage({
-        client,
-        toUserId: session.contactId,
-        contextToken: session.contextToken,
-        uploaded,
         ...(options.caption ? { caption: options.caption } : {}),
-      });
-
-      database.updateAttachmentStatus(attachmentId, "sent");
-      database.appendMessage({
-        id: createClientId("outbound-file"),
-        sessionId: session.id,
-        direction: "outbound",
-        messageType: "file",
-        filePath,
-        createdAt: new Date().toISOString(),
-        sourceMessageId: clientId,
       });
 
       console.log("文件已发送。");
@@ -271,9 +216,8 @@ async function run(): Promise<void> {
       console.log(`contact=${session.contactId}`);
       console.log(`file=${filePath}`);
       console.log(`size=${stat.size}`);
-      console.log(`md5=${uploaded.plaintextMd5}`);
+      console.log(`md5=${result.plaintextMd5}`);
     } catch (error) {
-      database.updateAttachmentStatus(attachmentId, "failed");
       throw error;
     }
   } finally {

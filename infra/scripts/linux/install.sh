@@ -471,6 +471,8 @@ FAMILY_STRIP_REASONING=true
 FAMILY_STRIP_COMMANDS=true
 FAMILY_STRIP_PATHS=true
 ALLOW_FILE_SEND=true
+FILE_SEND_ALLOWED_DIRS=${DATA_DIR}/outbox:/tmp
+FILE_SEND_MAX_BYTES=52428800
 EOF
 }
 
@@ -590,6 +592,8 @@ run_node_as_service_user() {
     "FAMILY_STRIP_COMMANDS=true"
     "FAMILY_STRIP_PATHS=true"
     "ALLOW_FILE_SEND=true"
+    "FILE_SEND_ALLOWED_DIRS=${DATA_DIR}/outbox:/tmp"
+    "FILE_SEND_MAX_BYTES=52428800"
   )
 
   if [[ "${SERVICE_USER}" == "$(id -un)" ]]; then

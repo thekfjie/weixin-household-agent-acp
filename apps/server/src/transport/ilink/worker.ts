@@ -1,7 +1,13 @@
 import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import { AppConfig, UserRole } from "../../config/types.js";
-import { parseBuiltInCommand } from "../../commands/index.js";
+import { ParsedCommand, parseBuiltInCommand } from "../../commands/index.js";
 import { buildCodexCommand, runCodexInvocation } from "../../codex/index.js";
+import {
+  assertFileAllowedForWechatCommand,
+  sendLocalFileToSession,
+} from "../../files/index.js";
 import { filterFamilyOutput } from "../../policy/index.js";
 import { resolveRole } from "../../router/index.js";
 import {
@@ -27,14 +33,38 @@ function buildMessageId(prefix: string): string {
 }
 
 function buildCommandReply(params: {
-  command: string;
+  command: ParsedCommand;
   session: SessionRecord;
   database: AppDatabase;
   role: UserRole;
+  account: WechatAccountRecord;
 }): string {
-  switch (params.command) {
+  switch (params.command.name) {
     case "/time":
       return `现在是北京时间 ${formatBeijingTime(new Date())}。`;
+    case "/help":
+      return params.role === "admin"
+        ? [
+            "可用命令：",
+            "/time 查看北京时间",
+            "/whoami 查看当前账号角色",
+            "/recent 查看最近几条消息",
+            "/summary 查看当前摘要",
+            "/new 或 /reset 重置当前对话上下文",
+            "/file <文件路径> [说明] 发送允许目录里的服务器文件",
+          ].join("\n")
+        : [
+            "可用命令：",
+            "/time 查看北京时间",
+            "/whoami 查看当前账号角色",
+            "/new 或 /reset 重置当前对话上下文",
+          ].join("\n");
+    case "/whoami":
+      return [
+        `角色：${params.role}`,
+        `账号：${params.account.id}`,
+        `会话：${params.session.id}`,
+      ].join("\n");
     case "/summary":
       return params.session.summaryText.trim()
         ? `当前摘要：${params.session.summaryText}`
@@ -69,6 +99,96 @@ function buildCommandReply(params: {
     default:
       return "暂不支持这个内建命令。";
   }
+}
+
+function formatBytes(value: number): string {
+  if (value < 1024) {
+    return `${value} B`;
+  }
+
+  const units = ["KB", "MB", "GB"];
+  let next = value / 1024;
+  for (const unit of units) {
+    if (next < 1024 || unit === units[units.length - 1]) {
+      return `${next.toFixed(next >= 10 ? 1 : 2)} ${unit}`;
+    }
+    next /= 1024;
+  }
+
+  return `${value} B`;
+}
+
+function buildCommandErrorReply(params: {
+  error: unknown;
+  role: UserRole;
+}): string {
+  const message =
+    params.error instanceof Error ? params.error.message : String(params.error);
+
+  return params.role === "admin"
+    ? `命令执行失败：${message}`
+    : "这个命令暂时没有执行成功。";
+}
+
+async function handleFileCommand(params: {
+  command: ParsedCommand;
+  config: AppConfig;
+  client: ILinkApiClient;
+  database: AppDatabase;
+  session: SessionRecord;
+  role: UserRole;
+}): Promise<string> {
+  if (params.role !== "admin") {
+    return "这个文件命令只对 admin 开放。";
+  }
+
+  if (!params.config.familyPolicy.allowFileSend) {
+    return "文件发送当前已被配置关闭。";
+  }
+
+  const [rawFilePath, ...captionParts] = params.command.args;
+  if (!rawFilePath) {
+    return [
+      "用法：/file <文件路径> [说明文字]",
+      `允许目录：${params.config.fileSend.allowedDirs.join(", ")}`,
+    ].join("\n");
+  }
+
+  if (!params.session.contextToken.trim()) {
+    return "当前会话缺少 context_token。请先从这个微信会话再发一条普通消息。";
+  }
+
+  const filePath = path.resolve(rawFilePath);
+  const stat = fs.statSync(filePath);
+  if (!stat.isFile()) {
+    throw new Error(`不是普通文件：${filePath}`);
+  }
+
+  if (stat.size > params.config.fileSend.maxBytes) {
+    throw new Error(
+      `文件太大：${formatBytes(stat.size)}，上限 ${formatBytes(
+        params.config.fileSend.maxBytes,
+      )}`,
+    );
+  }
+
+  assertFileAllowedForWechatCommand(filePath, params.config.fileSend);
+
+  const caption = captionParts.join(" ").trim();
+  const result = await sendLocalFileToSession({
+    client: params.client,
+    database: params.database,
+    session: params.session,
+    filePath,
+    ...(caption ? { caption } : {}),
+  });
+
+  return [
+    "文件已发送。",
+    `文件：${result.fileName}`,
+    `大小：${formatBytes(result.sizeBytes)}`,
+    `MD5：${result.plaintextMd5}`,
+  ].join("\n");
 }
 
 function buildCodexPrompt(params: {
@@ -345,12 +465,31 @@ export class WechatWorker {
     let rawReply: string;
 
     if (parsedCommand) {
-      rawReply = buildCommandReply({
-        command: parsedCommand.name,
-        session: activeSession,
-        database: this.options.database,
-        role: route.role,
-      });
+      try {
+        rawReply =
+          parsedCommand.name === "/file" || parsedCommand.name === "/sendfile"
+            ? await handleFileCommand({
+                command: parsedCommand,
+                config: this.options.config,
+                client,
+                database: this.options.database,
+                session: activeSession,
+                role: route.role,
+              })
+            : buildCommandReply({
+                command: parsedCommand,
+                session: activeSession,
+                database: this.options.database,
+                role: route.role,
+                account,
+              });
+      } catch (error) {
+        console.error("[worker] command failed", error);
+        rawReply = buildCommandErrorReply({
+          error,
+          role: route.role,
+        });
+      }
     } else {
       try {
         rawReply = await withTypingIndicator({

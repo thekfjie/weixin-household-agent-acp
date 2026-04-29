@@ -662,6 +662,9 @@ async function bootstrap(): Promise<void> {
   ensureDirectory(config.server.dataDir);
   ensureDirectory(config.codex.admin.workspace);
   ensureDirectory(config.codex.family.workspace);
+  for (const directory of config.fileSend.allowedDirs) {
+    ensureDirectory(directory);
+  }
 
   const database = new AppDatabase(
     path.join(config.server.dataDir, "weixin-household-agent-acp.sqlite"),
@@ -689,6 +692,9 @@ async function bootstrap(): Promise<void> {
   );
   console.log(
     `[bootstrap] family workspace: ${config.codex.family.workspace}`,
+  );
+  console.log(
+    `[bootstrap] file send allowed dirs: ${config.fileSend.allowedDirs.join(", ")}`,
   );
 
   const server = createHealthServer({

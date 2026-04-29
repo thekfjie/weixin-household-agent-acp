@@ -17,6 +17,11 @@ export interface FamilyPolicyConfig {
   allowFileSend: boolean;
 }
 
+export interface FileSendConfig {
+  allowedDirs: string[];
+  maxBytes: number;
+}
+
 export interface ServerConfig {
   port: number;
   timezone: string;
@@ -38,4 +43,5 @@ export interface AppConfig {
     family: CodexRuntimeConfig;
   };
   familyPolicy: FamilyPolicyConfig;
+  fileSend: FileSendConfig;
 }

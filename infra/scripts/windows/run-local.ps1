@@ -34,6 +34,10 @@ if (-not $env:DATA_DIR) {
   $env:DATA_DIR = $dataDir
 }
 
+if (-not $env:FILE_SEND_ALLOWED_DIRS) {
+  $env:FILE_SEND_ALLOWED_DIRS = "$(Join-Path $dataDir 'outbox');$env:TEMP"
+}
+
 if (-not $env:CODEX_ADMIN_WORKSPACE) {
   $env:CODEX_ADMIN_WORKSPACE = $adminWorkspace
 }

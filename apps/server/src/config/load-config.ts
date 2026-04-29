@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { AppConfig, CodexMode } from "./types.js";
 
@@ -174,6 +175,15 @@ function readCodexArgs(name: string): string[] {
   return raw ? splitCommandArgs(raw) : ["exec", "--skip-git-repo-check"];
 }
 
+function readPathList(name: string, fallback: string[]): string[] {
+  const raw = process.env[name]?.trim();
+  const values = raw
+    ? raw.split(path.delimiter).map((item) => item.trim()).filter(Boolean)
+    : fallback;
+
+  return [...new Set(values.map((item) => path.resolve(item)))];
+}
+
 function resolveDefaultCodexCommand(): string {
   return process.platform === "win32" ? "codex.cmd" : "codex";
 }
@@ -192,6 +202,10 @@ export function loadConfig(): AppConfig {
   const adminMode = readMode("CODEX_ADMIN_MODE", "full-auto");
   const familyMode = readMode("CODEX_FAMILY_MODE", "suggest");
   const codexTimeoutMs = readPositiveInteger("CODEX_TIMEOUT_MS", 180_000);
+  const fileAllowedDirs = readPathList("FILE_SEND_ALLOWED_DIRS", [
+    path.join(dataDir, "outbox"),
+    os.tmpdir(),
+  ]);
 
   return {
     server: {
@@ -248,6 +262,10 @@ export function loadConfig(): AppConfig {
       stripCommands: readBoolean("FAMILY_STRIP_COMMANDS", true),
       stripPaths: readBoolean("FAMILY_STRIP_PATHS", true),
       allowFileSend: readBoolean("ALLOW_FILE_SEND", true),
+    },
+    fileSend: {
+      allowedDirs: fileAllowedDirs,
+      maxBytes: readPositiveInteger("FILE_SEND_MAX_BYTES", 50 * 1024 * 1024),
     },
   };
 }
