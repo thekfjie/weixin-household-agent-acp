@@ -180,6 +180,49 @@ function buildCodexErrorReply(params: {
   return "我这边调用助手时出了一点问题，先稍等一下再试。";
 }
 
+async function withTypingIndicator<T>(params: {
+  client: ILinkApiClient;
+  toUserId: string;
+  contextToken: string;
+  work: () => Promise<T>;
+}): Promise<T> {
+  let typingTicket = "";
+
+  try {
+    const config = await params.client.getConfig(
+      params.toUserId,
+      params.contextToken,
+    );
+    typingTicket = config.typing_ticket?.trim() ?? "";
+
+    if (typingTicket) {
+      await params.client.sendTyping({
+        ilink_user_id: params.toUserId,
+        typing_ticket: typingTicket,
+        status: 1,
+      });
+    }
+  } catch (error) {
+    console.warn("[worker] failed to start typing indicator", error);
+  }
+
+  try {
+    return await params.work();
+  } finally {
+    if (typingTicket) {
+      try {
+        await params.client.sendTyping({
+          ilink_user_id: params.toUserId,
+          typing_ticket: typingTicket,
+          status: 2,
+        });
+      } catch (error) {
+        console.warn("[worker] failed to stop typing indicator", error);
+      }
+    }
+  }
+}
+
 export interface WechatWorkerOptions {
   config: AppConfig;
   database: AppDatabase;
@@ -310,12 +353,18 @@ export class WechatWorker {
       });
     } else {
       try {
-        rawReply = await buildCodexReply({
-          config: this.options.config,
-          database: this.options.database,
-          role: route.role,
-          session: activeSession,
-          userText: inbound.text,
+        rawReply = await withTypingIndicator({
+          client,
+          toUserId: inbound.contactId,
+          contextToken: inbound.contextToken,
+          work: () =>
+            buildCodexReply({
+              config: this.options.config,
+              database: this.options.database,
+              role: route.role,
+              session: activeSession,
+              userText: inbound.text,
+            }),
         });
       } catch (error) {
         console.error("[worker] codex reply failed", error);

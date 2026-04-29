@@ -20,6 +20,10 @@ interface CliOptions {
   limit: number;
 }
 
+class CliUsageError extends Error {
+  override name = "CliUsageError";
+}
+
 function usage(): string {
   return [
     "用法：node dist/apps/server/send-file.js [选项]",
@@ -49,7 +53,7 @@ function parseArgs(argv: string[]): CliOptions {
     const readValue = (): string => {
       const value = argv[++index];
       if (!value) {
-        throw new Error(`${arg} 缺少参数值`);
+        throw new CliUsageError(`${arg} 缺少参数值`);
       }
 
       return value;
@@ -86,13 +90,13 @@ function parseArgs(argv: string[]): CliOptions {
         const raw = readValue();
         const parsed = Number.parseInt(raw ?? "", 10);
         if (!Number.isInteger(parsed) || parsed <= 0) {
-          throw new Error(`--limit 不是有效正整数：${raw}`);
+          throw new CliUsageError(`--limit 不是有效正整数：${raw}`);
         }
         options.limit = parsed;
         break;
       }
       default:
-        throw new Error(`未知参数：${arg}`);
+        throw new CliUsageError(`未知参数：${arg}`);
     }
   }
 
@@ -176,7 +180,9 @@ function resolveTargetSession(
     return session;
   }
 
-  throw new Error("请用 --latest、--session，或 --account + --contact 指定目标。");
+  throw new CliUsageError(
+    "请用 --latest、--session，或 --account + --contact 指定目标。",
+  );
 }
 
 async function run(): Promise<void> {
@@ -196,7 +202,7 @@ async function run(): Promise<void> {
     }
 
     if (!options.filePath) {
-      throw new Error("缺少 --file PATH");
+      throw new CliUsageError("缺少 --file PATH");
     }
 
     const filePath = path.resolve(options.filePath);
@@ -277,7 +283,9 @@ async function run(): Promise<void> {
 
 void run().catch((error: unknown) => {
   console.error(error instanceof Error ? error.message : String(error));
-  console.error("");
-  console.error(usage());
+  if (error instanceof CliUsageError) {
+    console.error("");
+    console.error(usage());
+  }
   process.exit(1);
 });

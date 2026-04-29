@@ -40,6 +40,15 @@ function buildUploadUrl(params: {
   )}&filekey=${encodeURIComponent(params.fileKey)}`;
 }
 
+function describeUploadUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.origin}${parsed.pathname}`;
+  } catch {
+    return "[invalid upload url]";
+  }
+}
+
 function createClientId(): string {
   return `weixin-household-agent-acp-${crypto.randomUUID()}`;
 }
@@ -77,13 +86,14 @@ export async function uploadEncryptedBufferToCdn(params: {
       ? { uploadFullUrl: params.uploadParams.upload_full_url }
       : {}),
   });
+  const uploadTarget = describeUploadUrl(url);
 
   let lastError: unknown;
 
   for (let attempt = 1; attempt <= CDN_UPLOAD_RETRIES; attempt += 1) {
     try {
       const response = await fetch(url, {
-        method: "PUT",
+        method: "POST",
         headers: {
           "Content-Type": "application/octet-stream",
         },
@@ -93,13 +103,15 @@ export async function uploadEncryptedBufferToCdn(params: {
       if (response.status >= 400 && response.status < 500) {
         const message =
           response.headers.get("x-error-message") ?? (await response.text());
-        throw new Error(`CDN upload client error ${response.status}: ${message}`);
+        throw new Error(
+          `CDN upload client error ${response.status} at ${uploadTarget}: ${message}`,
+        );
       }
 
       if (response.status !== 200) {
         const message =
           response.headers.get("x-error-message") ?? `status ${response.status}`;
-        throw new Error(`CDN upload server error: ${message}`);
+        throw new Error(`CDN upload server error at ${uploadTarget}: ${message}`);
       }
 
       const encryptedParam = response.headers.get("x-encrypted-param");
