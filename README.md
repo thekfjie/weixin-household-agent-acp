@@ -61,19 +61,19 @@ bash infra/scripts/linux/uninstall.sh
 默认绑定为 `family` 角色：
 
 ```bash
-corepack pnpm setup
+corepack pnpm run wechat:setup
 ```
 
 绑定为 `admin`：
 
 ```bash
-corepack pnpm setup -- admin
+corepack pnpm run wechat:setup -- admin
 ```
 
 如果已经有账号，强制继续添加：
 
 ```bash
-corepack pnpm setup -- --force
+corepack pnpm run wechat:setup -- --force
 ```
 
 ### 3. 启动服务
