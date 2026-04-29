@@ -21,6 +21,15 @@ curl -fsSL https://raw.githubusercontent.com/thekfjie/weixin-household-agent-acp
 5. 如果还没有微信账号，停在终端二维码登录；扫码确认后继续
 6. 启动 `weixin-household-agent-acp` 服务
 
+### 权限说明
+
+- 入口命令必须由普通登录用户执行，不要用 `sudo bash ...`。
+- 如果 `/opt` 只有 root 可写，bootstrap 会用 `sudo` 创建 `/opt/weixin-household-agent-acp`，并只把这个项目目录 `chown` 给当前用户，方便后续 `git pull`、依赖安装和构建；不会修改 `/opt` 本身。
+- 安装器会在需要写入 `/var/lib/weixin-household-agent-acp`、`/etc/systemd/system`、`/etc/sudoers.d` 和执行 `systemctl` 时单独请求 sudo。
+- 默认 `USER_MODE=current`，systemd 服务用当前登录用户运行，适合你自己的 admin Codex 环境。
+- 如果选择 `USER_MODE=dedicated`，安装器会创建或复用专用服务用户；卸载时只有安装器创建的用户才会自动删除。
+- 默认 `PERMISSION_MODE=none`，不会给服务用户额外 sudo 权限；`limited/full` 要明确知道风险后再开。
+
 常用覆盖方式：
 
 ```bash
@@ -64,6 +73,19 @@ curl http://127.0.0.1:18080/healthz
 ```bash
 bash /opt/weixin-household-agent-acp/infra/scripts/linux/uninstall.sh --yes
 ```
+
+保留微信账号、会话和附件数据：
+
+```bash
+bash /opt/weixin-household-agent-acp/infra/scripts/linux/uninstall.sh --yes --keep-data
+```
+
+安装器会写入安装清单：
+
+- `/opt/weixin-household-agent-acp/.install-state`
+- `/var/lib/weixin-household-agent-acp/install-state.env`
+
+卸载会按清单恢复环境：停用并删除本项目 systemd 服务，恢复安装前备份过的 service/sudoers，删除安装器创建的应用目录、数据目录和服务用户。使用 `--keep-data` 时会保留数据目录，并默认保留服务用户，避免保留的数据变成无人拥有。
 
 ## 当前能力
 

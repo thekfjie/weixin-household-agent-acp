@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 SERVICE_NAME="weixin-household-agent-acp"
 PNPM_VERSION="10.13.1"
+STATE_FILE_NAME=".install-state"
 
 DEFAULT_APP_DIR="${REPO_DIR}"
 DEFAULT_DATA_DIR="/var/lib/weixin-household-agent-acp"
@@ -12,6 +13,7 @@ DEFAULT_PORT="18080"
 DEFAULT_TIMEZONE="Asia/Shanghai"
 LEGACY_TMP_ENV="/tmp/${SERVICE_NAME}.env"
 LEGACY_TMP_SERVICE="/tmp/${SERVICE_NAME}.service"
+
 TMP_ENV_FILE=""
 TMP_SERVICE_FILE=""
 PNPM_CMD=()
@@ -31,6 +33,16 @@ LOGIN_ROLE="admin"
 SKIP_LOGIN=0
 FORCE_LOGIN=0
 NO_START=0
+APP_DIR_MARKED_CREATED=0
+
+APP_DIR_CREATED_BY_INSTALLER=0
+DATA_DIR_CREATED_BY_INSTALLER=0
+SERVICE_USER_CREATED_BY_INSTALLER=0
+SERVICE_GROUP_CREATED_BY_INSTALLER=0
+SERVICE_FILE_CREATED_BY_INSTALLER=0
+SUDOERS_CREATED_BY_INSTALLER=0
+SERVICE_FILE_BACKUP=""
+SUDOERS_FILE_BACKUP=""
 
 cleanup() {
   if [[ -n "${TMP_ENV_FILE}" && -f "${TMP_ENV_FILE}" ]]; then
@@ -46,28 +58,28 @@ trap cleanup EXIT
 
 usage() {
   cat <<EOF
-Usage: bash infra/scripts/linux/install.sh [options]
+用法：bash infra/scripts/linux/install.sh [选项]
 
-One-command local installer. By default it uses the current login user as the
-systemd service user, installs dependencies, builds, asks for QR login only when
-no account exists, and starts/restarts the service.
+这是本项目的 Linux 安装器。默认使用当前登录用户运行 systemd 服务，
+自动安装依赖、构建、必要时停下来扫码，扫码后继续启动服务。
 
-Options:
-  -y, --yes                         Use defaults without configuration prompts
-      --app-dir PATH                Install directory (default: current repo)
-      --data-dir PATH               Data directory (default: ${DEFAULT_DATA_DIR})
-      --port PORT                   Service port (default: ${DEFAULT_PORT})
-      --timezone TZ                 Business timezone (default: ${DEFAULT_TIMEZONE})
-      --user-mode current|dedicated Service user mode (default: current)
-      --service-user USER           Dedicated service user name
-      --permission-mode MODE        none|limited|full sudo policy (default: none)
-      --admin-command CMD           Codex admin command
-      --family-command CMD          Codex family command
-      --login-role admin|family     Role used for first QR bind (default: admin)
-      --skip-login                  Do not run terminal QR login
-      --force-login                 Always run QR login even if accounts exist
-      --no-start                    Install/build but do not restart systemd
-  -h, --help                        Show this help
+选项：
+  -y, --yes                         使用默认值，不进入配置问答
+      --app-dir PATH                应用目录，默认当前仓库
+      --data-dir PATH               数据目录，默认 ${DEFAULT_DATA_DIR}
+      --port PORT                   服务端口，默认 ${DEFAULT_PORT}
+      --timezone TZ                 业务时区，默认 ${DEFAULT_TIMEZONE}
+      --user-mode current|dedicated 服务用户模式，默认 current
+      --service-user USER           dedicated 模式下的服务用户名
+      --permission-mode MODE        none|limited|full sudo 策略，默认 none
+      --admin-command CMD           admin Codex 命令
+      --family-command CMD          family Codex 命令
+      --login-role admin|family     首次扫码绑定角色，默认 admin
+      --skip-login                  不执行终端扫码
+      --force-login                 即使已有账号也继续扫码添加
+      --no-start                    安装和构建，但不启动 systemd 服务
+      --app-dir-created             告诉安装器应用目录由 bootstrap 刚创建
+  -h, --help                        显示帮助
 EOF
 }
 
@@ -110,15 +122,15 @@ prompt_yes_no() {
 require_command() {
   local command_name="$1"
   if ! command -v "${command_name}" >/dev/null 2>&1; then
-    echo "Missing required command: ${command_name}" >&2
+    echo "缺少必要命令：${command_name}" >&2
     exit 1
   fi
 }
 
 require_non_root() {
   if [[ "${EUID}" -eq 0 ]]; then
-    echo "Please run this installer as your normal login user with sudo access." >&2
-    echo "Do not prefix the install command with sudo." >&2
+    echo "请用普通登录用户运行安装器，不要在命令前加 sudo。" >&2
+    echo "安装器会在需要写入 /opt、/var/lib、/etc/systemd/system 时单独调用 sudo。" >&2
     exit 1
   fi
 }
@@ -133,7 +145,7 @@ validate_choice() {
     fi
   done
 
-  echo "Invalid value: ${value}" >&2
+  echo "无效取值：${value}" >&2
   exit 1
 }
 
@@ -197,12 +209,16 @@ parse_args() {
         NO_START=1
         shift
         ;;
+      --app-dir-created)
+        APP_DIR_MARKED_CREATED=1
+        shift
+        ;;
       -h|--help)
         usage
         exit 0
         ;;
       *)
-        echo "Unknown option: $1" >&2
+        echo "未知选项：$1" >&2
         usage >&2
         exit 1
         ;;
@@ -214,14 +230,82 @@ require_node_version() {
   require_command node
 
   if ! node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major > 22 || (major === 22 && minor >= 5) ? 0 : 1);'; then
-    echo "Node.js >= 22.5.0 is required because this project uses node:sqlite." >&2
-    echo "Current version: $(node -v)" >&2
+    echo "需要 Node.js >= 22.5.0，因为项目使用 node:sqlite。" >&2
+    echo "当前版本：$(node -v)" >&2
     exit 1
   fi
 }
 
 resolve_codex_command() {
   command -v codex 2>/dev/null || printf '%s\n' "codex"
+}
+
+state_app_file() {
+  printf '%s\n' "${APP_DIR}/${STATE_FILE_NAME}"
+}
+
+state_data_file() {
+  printf '%s\n' "${DATA_DIR}/install-state.env"
+}
+
+load_previous_state_flags() {
+  local state_file
+  state_file="$(state_app_file)"
+  if [[ ! -f "${state_file}" ]]; then
+    state_file="$(state_data_file)"
+  fi
+
+  if [[ ! -f "${state_file}" ]]; then
+    return
+  fi
+
+  # shellcheck disable=SC1090
+  source "${state_file}"
+
+  if [[ "${INSTALL_APP_DIR:-}" == "${APP_DIR}" ]]; then
+    APP_DIR_CREATED_BY_INSTALLER="${INSTALL_APP_DIR_CREATED_BY_INSTALLER:-${APP_DIR_CREATED_BY_INSTALLER}}"
+  fi
+
+  if [[ "${INSTALL_DATA_DIR:-}" == "${DATA_DIR}" ]]; then
+    DATA_DIR_CREATED_BY_INSTALLER="${INSTALL_DATA_DIR_CREATED_BY_INSTALLER:-${DATA_DIR_CREATED_BY_INSTALLER}}"
+  fi
+
+  if [[ "${INSTALL_SERVICE_USER:-}" == "${SERVICE_USER}" ]]; then
+    SERVICE_USER_CREATED_BY_INSTALLER="${INSTALL_SERVICE_USER_CREATED_BY_INSTALLER:-${SERVICE_USER_CREATED_BY_INSTALLER}}"
+  fi
+
+  if [[ "${INSTALL_SERVICE_GROUP:-}" == "${SERVICE_GROUP}" ]]; then
+    SERVICE_GROUP_CREATED_BY_INSTALLER="${INSTALL_SERVICE_GROUP_CREATED_BY_INSTALLER:-${SERVICE_GROUP_CREATED_BY_INSTALLER}}"
+  fi
+}
+
+capture_preinstall_state() {
+  load_previous_state_flags
+
+  if [[ "${APP_DIR_MARKED_CREATED}" -eq 1 || ! -e "${APP_DIR}" ]]; then
+    APP_DIR_CREATED_BY_INSTALLER=1
+  fi
+
+  if [[ ! -e "${DATA_DIR}" ]]; then
+    DATA_DIR_CREATED_BY_INSTALLER=1
+  fi
+}
+
+validate_app_dir_target() {
+  if [[ "${APP_DIR}" == "${REPO_DIR}" ]]; then
+    return
+  fi
+
+  if [[ "${APP_DIR_MARKED_CREATED}" -eq 1 || -f "$(state_app_file)" ]]; then
+    return
+  fi
+
+  if [[ -e "${APP_DIR}" ]]; then
+    echo "应用目录已存在，且没有本项目安装清单：${APP_DIR}" >&2
+    echo "为避免覆盖用户已有目录后无法完整恢复，安装器不会接管它。" >&2
+    echo "请换一个 --app-dir，或先手动移走该目录。" >&2
+    exit 1
+  fi
 }
 
 prepare_package_manager() {
@@ -251,7 +335,7 @@ prepare_package_manager() {
     return
   fi
 
-  echo "Missing pnpm/corepack/npm. Install Node.js with Corepack enabled, then rerun." >&2
+  echo "缺少 pnpm/corepack/npm。请安装带 Corepack 的 Node.js 后重试。" >&2
   exit 1
 }
 
@@ -260,18 +344,18 @@ run_pnpm() {
 }
 
 configure_interactively() {
-  APP_DIR="$(prompt_default "Install directory" "${APP_DIR}")"
-  DATA_DIR="$(prompt_default "Data directory" "${DATA_DIR}")"
-  PORT="$(prompt_default "Service port" "${PORT}")"
-  TIMEZONE="$(prompt_default "Timezone" "${TIMEZONE}")"
+  APP_DIR="$(prompt_default "应用目录" "${APP_DIR}")"
+  DATA_DIR="$(prompt_default "数据目录" "${DATA_DIR}")"
+  PORT="$(prompt_default "服务端口" "${PORT}")"
+  TIMEZONE="$(prompt_default "业务时区" "${TIMEZONE}")"
 
   if [[ "${YES}" -eq 0 ]]; then
     echo ""
-    echo "Service user mode:"
-    echo "  1) current login user (recommended for admin Codex)"
-    echo "  2) dedicated service user"
+    echo "服务用户模式："
+    echo "  1) current   - 使用当前登录用户运行服务，推荐给 admin Codex"
+    echo "  2) dedicated - 创建或复用专用服务用户"
     local service_user_mode
-    read -r -p "Choose service user mode [1]: " service_user_mode
+    read -r -p "请选择服务用户模式 [1]: " service_user_mode
     if [[ "${service_user_mode:-1}" == "2" ]]; then
       USER_MODE="dedicated"
     else
@@ -280,7 +364,7 @@ configure_interactively() {
   fi
 
   if [[ "${USER_MODE}" == "dedicated" ]]; then
-    SERVICE_USER="$(prompt_default "Dedicated service user" "${SERVICE_USER:-weixin-agent}")"
+    SERVICE_USER="$(prompt_default "专用服务用户" "${SERVICE_USER:-weixin-agent}")"
     SERVICE_GROUP="${SERVICE_USER}"
   else
     SERVICE_USER="$(id -un)"
@@ -289,12 +373,12 @@ configure_interactively() {
 
   if [[ "${YES}" -eq 0 ]]; then
     echo ""
-    echo "Sudo policy for service user:"
-    echo "  1) none    - no extra sudo access"
-    echo "  2) limited - systemctl/journalctl/docker/apt"
-    echo "  3) full    - full NOPASSWD sudo"
+    echo "服务用户 sudo 策略："
+    echo "  1) none    - 不给服务用户额外 sudo 权限"
+    echo "  2) limited - 仅允许 systemctl/journalctl/docker/apt"
+    echo "  3) full    - NOPASSWD 全 sudo，仅建议你自己的 admin 环境"
     local choice
-    read -r -p "Permission mode [1]: " choice
+    read -r -p "请选择 sudo 策略 [1]: " choice
     case "${choice:-1}" in
       1) PERMISSION_MODE="none" ;;
       2) PERMISSION_MODE="limited" ;;
@@ -303,9 +387,9 @@ configure_interactively() {
     esac
   fi
 
-  ADMIN_COMMAND="$(prompt_default "Codex admin command" "${ADMIN_COMMAND:-$(resolve_codex_command)}")"
-  FAMILY_COMMAND="$(prompt_default "Codex family command" "${FAMILY_COMMAND:-${ADMIN_COMMAND}}")"
-  LOGIN_ROLE="$(prompt_default "First QR bind role" "${LOGIN_ROLE}")"
+  ADMIN_COMMAND="$(prompt_default "admin Codex 命令" "${ADMIN_COMMAND:-$(resolve_codex_command)}")"
+  FAMILY_COMMAND="$(prompt_default "family Codex 命令" "${FAMILY_COMMAND:-${ADMIN_COMMAND}}")"
+  LOGIN_ROLE="$(prompt_default "首次扫码绑定角色" "${LOGIN_ROLE}")"
 
   validate_choice "${USER_MODE}" current dedicated
   validate_choice "${PERMISSION_MODE}" none limited full
@@ -322,13 +406,37 @@ ensure_service_user() {
   SERVICE_GROUP="${SERVICE_USER}"
 
   if ! getent group "${SERVICE_GROUP}" >/dev/null 2>&1; then
-    echo "Creating group ${SERVICE_GROUP}"
+    echo "创建服务用户组：${SERVICE_GROUP}"
     sudo groupadd --system "${SERVICE_GROUP}"
+    SERVICE_GROUP_CREATED_BY_INSTALLER=1
   fi
 
   if ! id "${SERVICE_USER}" >/dev/null 2>&1; then
-    echo "Creating user ${SERVICE_USER}"
+    echo "创建服务用户：${SERVICE_USER}"
     sudo useradd -m -s /bin/bash -g "${SERVICE_GROUP}" "${SERVICE_USER}"
+    SERVICE_USER_CREATED_BY_INSTALLER=1
+  fi
+}
+
+prepare_system_backups() {
+  local backup_dir="${DATA_DIR}/backups"
+  local stamp
+  stamp="$(date +%Y%m%d%H%M%S)"
+
+  sudo mkdir -p "${backup_dir}"
+
+  if [[ -f "/etc/systemd/system/${SERVICE_NAME}.service" ]]; then
+    SERVICE_FILE_BACKUP="${backup_dir}/${SERVICE_NAME}.service.${stamp}.bak"
+    sudo cp -a "/etc/systemd/system/${SERVICE_NAME}.service" "${SERVICE_FILE_BACKUP}"
+  else
+    SERVICE_FILE_CREATED_BY_INSTALLER=1
+  fi
+
+  if [[ -f "/etc/sudoers.d/${SERVICE_NAME}" ]]; then
+    SUDOERS_FILE_BACKUP="${backup_dir}/${SERVICE_NAME}.sudoers.${stamp}.bak"
+    sudo cp -a "/etc/sudoers.d/${SERVICE_NAME}" "${SUDOERS_FILE_BACKUP}"
+  elif [[ "${PERMISSION_MODE}" != "none" ]]; then
+    SUDOERS_CREATED_BY_INSTALLER=1
   fi
 }
 
@@ -507,12 +615,12 @@ try {
 
 run_login_if_needed() {
   if [[ "${SKIP_LOGIN}" -eq 1 ]]; then
-    echo "Skipping QR login by request."
+    echo "按要求跳过扫码登录。"
     return
   fi
 
   if [[ "${FORCE_LOGIN}" -eq 0 ]] && has_saved_accounts; then
-    echo "Saved WeChat account found. Skipping QR login."
+    echo "已发现微信账号记录，跳过扫码登录。"
     return
   fi
 
@@ -522,8 +630,8 @@ run_login_if_needed() {
   fi
 
   echo ""
-  echo "Starting terminal QR login for role: ${LOGIN_ROLE}"
-  echo "Scan with WeChat and confirm on your phone. The installer will continue afterwards."
+  echo "开始终端扫码登录，绑定角色：${LOGIN_ROLE}"
+  echo "请用微信扫码并在手机上确认；确认后安装器会继续运行。"
   echo ""
 
   pushd "${APP_DIR}" >/dev/null
@@ -539,23 +647,76 @@ start_service() {
   sudo systemctl enable "${SERVICE_NAME}"
 
   if [[ "${NO_START}" -eq 1 ]]; then
-    echo "Systemd service installed but not started because --no-start was used."
+    echo "已安装 systemd 服务，但因 --no-start 未启动。"
     return
   fi
 
   sudo systemctl restart "${SERVICE_NAME}"
 }
 
+write_install_state_file() {
+  local target_file="$1"
+  local tmp_file
+  tmp_file="$(mktemp "/tmp/${SERVICE_NAME}.state.XXXXXX")"
+
+  {
+    printf 'INSTALL_STATE_VERSION=%q\n' "1"
+    printf 'INSTALL_SERVICE_NAME=%q\n' "${SERVICE_NAME}"
+    printf 'INSTALL_APP_DIR=%q\n' "${APP_DIR}"
+    printf 'INSTALL_DATA_DIR=%q\n' "${DATA_DIR}"
+    printf 'INSTALL_SERVICE_USER=%q\n' "${SERVICE_USER}"
+    printf 'INSTALL_SERVICE_GROUP=%q\n' "${SERVICE_GROUP}"
+    printf 'INSTALL_USER_MODE=%q\n' "${USER_MODE}"
+    printf 'INSTALL_PERMISSION_MODE=%q\n' "${PERMISSION_MODE}"
+    printf 'INSTALL_APP_DIR_CREATED_BY_INSTALLER=%q\n' "${APP_DIR_CREATED_BY_INSTALLER}"
+    printf 'INSTALL_DATA_DIR_CREATED_BY_INSTALLER=%q\n' "${DATA_DIR_CREATED_BY_INSTALLER}"
+    printf 'INSTALL_SERVICE_USER_CREATED_BY_INSTALLER=%q\n' "${SERVICE_USER_CREATED_BY_INSTALLER}"
+    printf 'INSTALL_SERVICE_GROUP_CREATED_BY_INSTALLER=%q\n' "${SERVICE_GROUP_CREATED_BY_INSTALLER}"
+    printf 'INSTALL_SERVICE_FILE_CREATED_BY_INSTALLER=%q\n' "${SERVICE_FILE_CREATED_BY_INSTALLER}"
+    printf 'INSTALL_SUDOERS_CREATED_BY_INSTALLER=%q\n' "${SUDOERS_CREATED_BY_INSTALLER}"
+    printf 'INSTALL_SERVICE_FILE_BACKUP=%q\n' "${SERVICE_FILE_BACKUP}"
+    printf 'INSTALL_SUDOERS_FILE_BACKUP=%q\n' "${SUDOERS_FILE_BACKUP}"
+    printf 'INSTALL_CREATED_AT=%q\n' "$(date -Is)"
+  } > "${tmp_file}"
+
+  sudo install -m 644 -o root -g root "${tmp_file}" "${target_file}"
+  rm -f "${tmp_file}"
+}
+
+write_install_state() {
+  write_install_state_file "$(state_app_file)"
+  write_install_state_file "$(state_data_file)"
+}
+
+print_permission_summary() {
+  echo ""
+  echo "权限说明："
+  echo "  - 请用普通登录用户运行安装器，不要 sudo bash install.sh。"
+  echo "  - 安装器只在必要步骤调用 sudo：创建/写入应用目录、数据目录、systemd 服务、可选 sudoers、启动服务。"
+  echo "  - 如果应用目录在 /opt 下，安装器会用 sudo 创建 ${APP_DIR}，并只把这个项目目录归属给当前用户，方便 git pull、pnpm install 和构建；不会修改 /opt 本身。"
+  echo "  - 数据目录会归属给服务用户 ${SERVICE_USER}:${SERVICE_GROUP}，因为运行中的服务需要写 SQLite、二维码和附件缓存。"
+  echo "  - 卸载时会读取安装清单；自己创建的目录/用户会删除，覆盖前备份过的 systemd/sudoers 会恢复。"
+}
+
 print_summary() {
   echo ""
-  echo "Install completed."
-  echo "Useful commands:"
+  echo "安装完成。"
+  echo "安装清单："
+  echo "  $(state_app_file)"
+  echo "  $(state_data_file)"
+  echo ""
+  echo "常用命令："
   echo "  sudo systemctl status ${SERVICE_NAME}"
   echo "  journalctl -u ${SERVICE_NAME} -f"
   echo "  curl http://127.0.0.1:${PORT}/healthz"
   echo ""
-  echo "Bind another account later:"
+  echo "之后添加家人账号："
   echo "  cd ${APP_DIR} && node dist/apps/server/setup.js family --force"
+  echo ""
+  echo "卸载并恢复环境："
+  echo "  bash ${APP_DIR}/infra/scripts/linux/uninstall.sh --yes"
+  echo "保留微信账号和会话数据："
+  echo "  bash ${APP_DIR}/infra/scripts/linux/uninstall.sh --yes --keep-data"
 }
 
 main() {
@@ -566,29 +727,34 @@ main() {
   require_node_version
 
   configure_interactively
+  capture_preinstall_state
+  validate_app_dir_target
   ensure_service_user
 
-  echo "== ${SERVICE_NAME} install =="
-  echo "Repository: ${REPO_DIR}"
-  echo "Install directory: ${APP_DIR}"
-  echo "Data directory: ${DATA_DIR}"
-  echo "Service user: ${SERVICE_USER}:${SERVICE_GROUP}"
-  echo "Permission mode: ${PERMISSION_MODE}"
-  echo "Port: ${PORT}"
-  echo "Timezone: ${TIMEZONE}"
-  echo "First QR role: ${LOGIN_ROLE}"
+  echo "== ${SERVICE_NAME} 安装 =="
+  echo "源码目录：${REPO_DIR}"
+  echo "应用目录：${APP_DIR}"
+  echo "数据目录：${DATA_DIR}"
+  echo "服务用户：${SERVICE_USER}:${SERVICE_GROUP}"
+  echo "服务用户 sudo 策略：${PERMISSION_MODE}"
+  echo "端口：${PORT}"
+  echo "时区：${TIMEZONE}"
+  echo "首次扫码角色：${LOGIN_ROLE}"
+  print_permission_summary
   echo ""
 
-  if ! prompt_yes_no "Continue installation?" "y"; then
-    echo "Install cancelled."
+  if ! prompt_yes_no "继续安装？" "y"; then
+    echo "安装已取消。"
     exit 0
   fi
 
   sync_app_dir
+  prepare_system_backups
   install_env_and_service
   build_project
   run_login_if_needed
   start_service
+  write_install_state
   print_summary
 }
 
