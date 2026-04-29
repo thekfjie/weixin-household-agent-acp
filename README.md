@@ -6,6 +6,63 @@
 
 ## 一键部署
 
+### 服务器上按这个顺序做
+
+先用你的普通登录用户 SSH 到服务器，不要切到 root：
+
+```bash
+whoami
+pwd
+node -v
+git --version
+sudo -v
+```
+
+要求：
+
+- `node -v` 至少是 `v22.5.0`
+- 当前用户可以执行 `sudo`
+- 不要用 `sudo su -` 之后再安装
+
+如果 Node 版本不够，先用你服务器上习惯的方式安装 Node.js 22 或更高版本，再继续。
+
+然后执行一键安装：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/thekfjie/weixin-household-agent-acp/main/infra/scripts/linux/bootstrap.sh | bash
+```
+
+安装过程里如果停在二维码，直接用你的微信扫码并在手机上确认。确认后脚本会继续运行并启动服务。
+
+安装完成后检查：
+
+```bash
+curl http://127.0.0.1:18080/healthz
+sudo systemctl status weixin-household-agent-acp
+journalctl -u weixin-household-agent-acp -f
+```
+
+后续要添加家人的微信账号：
+
+```bash
+cd /opt/weixin-household-agent-acp
+node dist/apps/server/setup.js family --force
+sudo systemctl restart weixin-household-agent-acp
+```
+
+重装但保留微信账号和会话数据：
+
+```bash
+bash /opt/weixin-household-agent-acp/infra/scripts/linux/uninstall.sh --yes --keep-data
+curl -fsSL https://raw.githubusercontent.com/thekfjie/weixin-household-agent-acp/main/infra/scripts/linux/bootstrap.sh | bash
+```
+
+彻底卸载并尽量恢复安装前环境：
+
+```bash
+bash /opt/weixin-household-agent-acp/infra/scripts/linux/uninstall.sh --yes
+```
+
 在 Linux 服务器上用普通登录用户运行，不要加 `sudo`：
 
 ```bash
