@@ -35,6 +35,25 @@
 corepack pnpm build
 ```
 
+### Linux 交互式安装
+
+```bash
+bash infra/scripts/linux/install.sh
+```
+
+安装脚本会先问：
+
+- 服务运行用户要不要单独创建
+- 打算给这个用户什么 sudo 权限
+- 应用目录、数据目录、端口、时区
+- Codex 命令路径
+
+### Linux 一键卸载
+
+```bash
+bash infra/scripts/linux/uninstall.sh
+```
+
 ### 2. 终端扫码登录
 
 默认绑定为 `family` 角色：
