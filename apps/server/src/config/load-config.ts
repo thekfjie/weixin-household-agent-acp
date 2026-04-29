@@ -65,7 +65,7 @@ export function loadConfig(): AppConfig {
 
   return {
     server: {
-      port: readPort("PORT", 8080),
+      port: readPort("PORT", 18080),
       timezone: readEnv("TIMEZONE", "Asia/Shanghai"),
       dataDir,
     },

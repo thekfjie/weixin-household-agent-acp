@@ -305,7 +305,7 @@ main() {
   echo "  curl http://127.0.0.1:${port}/healthz"
   echo ""
   echo "Recommended next step:"
-  echo "  cd ${app_dir} && corepack pnpm run wechat:setup"
+  echo "  cd ${app_dir} && corepack pnpm run setup -- admin"
 }
 
 main "$@"
