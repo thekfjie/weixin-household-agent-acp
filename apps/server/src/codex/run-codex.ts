@@ -40,10 +40,47 @@ function extractTextFromJsonLines(stdout: string): string | undefined {
   return joined || undefined;
 }
 
+function isCodexFooterLine(line: string): boolean {
+  return (
+    line === "tokens used" ||
+    /^\d{4}-\d{2}-\d{2}T.*\b(ERROR|WARN)\b/.test(line) ||
+    /^[\d,]+$/.test(line)
+  );
+}
+
+function extractTextFromHumanTranscript(stdout: string): string | undefined {
+  const lines = stdout.replace(/\r\n/g, "\n").split("\n");
+  const lastCodexMarker = lines
+    .map((line) => line.trim())
+    .lastIndexOf("codex");
+
+  if (lastCodexMarker < 0) {
+    return undefined;
+  }
+
+  const answerLines: string[] = [];
+  for (const line of lines.slice(lastCodexMarker + 1)) {
+    const trimmed = line.trim();
+    if (isCodexFooterLine(trimmed)) {
+      break;
+    }
+
+    answerLines.push(line);
+  }
+
+  const answer = answerLines.join("\n").trim();
+  return answer || undefined;
+}
+
 function normalizeCodexStdout(stdout: string): string {
   const jsonText = extractTextFromJsonLines(stdout);
   if (jsonText) {
     return jsonText;
+  }
+
+  const humanText = extractTextFromHumanTranscript(stdout);
+  if (humanText) {
+    return humanText;
   }
 
   return trimOutput(stdout);
