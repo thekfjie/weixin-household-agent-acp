@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { UserRole } from "../config/types.js";
 import { SQLITE_SCHEMA } from "./schema.js";
 import {
+  AttachmentRecord,
   MessageRecord,
   SessionRecord,
   WechatAccountRecord,
@@ -44,6 +45,19 @@ function toSessionRecord(row: Record<string, unknown>): SessionRecord {
     lastActiveAt: String(row.last_active_at),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
+  };
+}
+
+function toAttachmentRecord(row: Record<string, unknown>): AttachmentRecord {
+  return {
+    id: String(row.id),
+    sessionId: String(row.session_id),
+    localPath: String(row.local_path),
+    mimeType: String(row.mime_type),
+    fileName: String(row.file_name),
+    sizeBytes: Number(row.size_bytes),
+    outboundStatus: String(row.outbound_status),
+    createdAt: String(row.created_at),
   };
 }
 
@@ -226,6 +240,27 @@ export class AppDatabase {
     return row ? toSessionRecord(row) : undefined;
   }
 
+  getSessionById(sessionId: string): SessionRecord | undefined {
+    const statement = this.db.prepare("SELECT * FROM sessions WHERE id = ?");
+    const row = statement.get(sessionId) as Record<string, unknown> | undefined;
+    return row ? toSessionRecord(row) : undefined;
+  }
+
+  listRecentSessions(limit = 20): SessionRecord[] {
+    const rows = this.db
+      .prepare(
+        `
+        SELECT * FROM sessions
+        WHERE status = 'active'
+        ORDER BY last_active_at DESC
+        LIMIT ?
+        `,
+      )
+      .all(limit) as Array<Record<string, unknown>>;
+
+    return rows.map(toSessionRecord);
+  }
+
   saveSession(input: {
     id: string;
     wechatAccountId: string;
@@ -329,5 +364,80 @@ export class AppDatabase {
         ? { sourceMessageId: String(row.source_message_id) }
         : {}),
     }));
+  }
+
+  saveAttachment(input: {
+    id: string;
+    sessionId: string;
+    localPath: string;
+    mimeType: string;
+    fileName: string;
+    sizeBytes: number;
+    outboundStatus: string;
+    createdAt?: string;
+  }): AttachmentRecord {
+    const createdAt = input.createdAt ?? createNow();
+
+    this.db
+      .prepare(
+        `
+        INSERT INTO attachments (
+          id, session_id, local_path, mime_type, file_name,
+          size_bytes, outbound_status, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          local_path = excluded.local_path,
+          mime_type = excluded.mime_type,
+          file_name = excluded.file_name,
+          size_bytes = excluded.size_bytes,
+          outbound_status = excluded.outbound_status
+        `,
+      )
+      .run(
+        input.id,
+        input.sessionId,
+        input.localPath,
+        input.mimeType,
+        input.fileName,
+        input.sizeBytes,
+        input.outboundStatus,
+        createdAt,
+      );
+
+    const saved = this.getAttachmentById(input.id);
+    if (!saved) {
+      throw new Error(`Failed to save attachment ${input.id}`);
+    }
+
+    return saved;
+  }
+
+  getAttachmentById(attachmentId: string): AttachmentRecord | undefined {
+    const row = this.db
+      .prepare("SELECT * FROM attachments WHERE id = ?")
+      .get(attachmentId) as Record<string, unknown> | undefined;
+    return row ? toAttachmentRecord(row) : undefined;
+  }
+
+  updateAttachmentStatus(
+    attachmentId: string,
+    outboundStatus: string,
+  ): AttachmentRecord {
+    this.db
+      .prepare(
+        `
+        UPDATE attachments
+        SET outbound_status = ?
+        WHERE id = ?
+        `,
+      )
+      .run(outboundStatus, attachmentId);
+
+    const updated = this.getAttachmentById(attachmentId);
+    if (!updated) {
+      throw new Error(`Attachment not found: ${attachmentId}`);
+    }
+
+    return updated;
   }
 }

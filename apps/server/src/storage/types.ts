@@ -36,3 +36,14 @@ export interface MessageRecord {
   createdAt: string;
   sourceMessageId?: string;
 }
+
+export interface AttachmentRecord {
+  id: string;
+  sessionId: string;
+  localPath: string;
+  mimeType: string;
+  fileName: string;
+  sizeBytes: number;
+  outboundStatus: string;
+  createdAt: string;
+}

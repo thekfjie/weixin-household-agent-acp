@@ -44,17 +44,9 @@ function createClientId(): string {
   return `weixin-household-agent-acp-${crypto.randomUUID()}`;
 }
 
-function detectUploadMediaType(filePath: string): ILinkUploadMediaTypeValue {
-  const extension = path.extname(filePath).toLowerCase();
-
-  if ([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"].includes(extension)) {
-    return ILinkUploadMediaType.IMAGE;
-  }
-
-  if ([".mp4", ".mov", ".avi", ".mkv", ".webm"].includes(extension)) {
-    return ILinkUploadMediaType.VIDEO;
-  }
-
+function detectUploadMediaType(_filePath: string): ILinkUploadMediaTypeValue {
+  // The v0 path intentionally sends local artifacts as FILE. IMAGE/VIDEO need
+  // thumbnail handling, which should be added separately after file E2E is stable.
   return ILinkUploadMediaType.FILE;
 }
 
@@ -91,7 +83,7 @@ export async function uploadEncryptedBufferToCdn(params: {
   for (let attempt = 1; attempt <= CDN_UPLOAD_RETRIES; attempt += 1) {
     try {
       const response = await fetch(url, {
-        method: "POST",
+        method: "PUT",
         headers: {
           "Content-Type": "application/octet-stream",
         },

@@ -75,6 +75,20 @@ node dist/apps/server/setup.js family --force
 sudo systemctl restart weixin-household-agent-acp
 ```
 
+发送文件测试：
+
+```bash
+cd /opt/weixin-household-agent-acp
+node dist/apps/server/send-file.js --list
+node dist/apps/server/send-file.js --latest --file /tmp/test.txt --caption "测试文件"
+```
+
+说明：
+
+- 目标微信必须先给机器人发过消息，这样系统才有 `context_token` 可以回传文件。
+- `--latest` 会发给最近活跃会话；更稳的方式是先 `--list`，再用 `--session <id>` 指定目标。
+- v0 文件路径统一按微信 `FILE` 发送；图片/视频缩略图后续单独补，不影响普通文件。
+
 重装但保留微信账号和会话数据：
 
 ```bash
@@ -177,6 +191,7 @@ bash /opt/weixin-household-agent-acp/infra/scripts/linux/uninstall.sh --yes --ke
 - HTTP 健康检查和管理接口
 - 多账号轮询 worker 骨架
 - 文件发送链路骨架
+- 服务器本地 CLI 文件发送
 - family 输出过滤
 - 北京时间上下文注入
 - Codex CLI 非交互回复链路
@@ -226,6 +241,27 @@ CODEX_ADMIN_ARGS=exec --skip-git-repo-check --dangerously-bypass-approvals-and-s
 
 ```bash
 sudo systemctl restart weixin-household-agent-acp
+```
+
+## 文件发送
+
+文件发送走 iLink 原生媒体链路：
+
+```text
+本地文件
+-> 计算明文大小和 MD5
+-> AES-128-ECB 加密
+-> getuploadurl(media_type=3)
+-> PUT 上传密文到 CDN
+-> sendmessage(FILE)
+```
+
+常用命令：
+
+```bash
+node dist/apps/server/send-file.js --list
+node dist/apps/server/send-file.js --session <session_id> --file /path/to/file.pdf
+node dist/apps/server/send-file.js --latest --file /tmp/test.txt --caption "给你一个文件"
 ```
 
 ## 文档
