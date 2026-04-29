@@ -4,6 +4,8 @@ set -euo pipefail
 SERVICE_NAME="weixin-household-agent-acp"
 DEFAULT_APP_DIR="/opt/weixin-household-agent-acp"
 DEFAULT_DATA_DIR="/var/lib/weixin-household-agent-acp"
+LEGACY_TMP_ENV="/tmp/${SERVICE_NAME}.env"
+LEGACY_TMP_SERVICE="/tmp/${SERVICE_NAME}.service"
 
 prompt_default() {
   local label="$1"
@@ -59,6 +61,8 @@ main() {
   sudo rm -f "/etc/sudoers.d/${SERVICE_NAME}"
   sudo rm -rf "${app_dir}"
   sudo rm -rf "${data_dir}"
+  sudo rm -f "${LEGACY_TMP_ENV}" "${LEGACY_TMP_SERVICE}"
+  sudo rm -f "/tmp/${SERVICE_NAME}.env."* "/tmp/${SERVICE_NAME}.service."* 2>/dev/null || true
   sudo systemctl daemon-reload
   sudo systemctl reset-failed
 

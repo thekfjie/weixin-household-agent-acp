@@ -7,6 +7,22 @@ SERVICE_NAME="weixin-household-agent-acp"
 DEFAULT_DATA_DIR="/var/lib/weixin-household-agent-acp"
 DEFAULT_PORT="18080"
 DEFAULT_TIMEZONE="Asia/Shanghai"
+LEGACY_TMP_ENV="/tmp/${SERVICE_NAME}.env"
+LEGACY_TMP_SERVICE="/tmp/${SERVICE_NAME}.service"
+TMP_ENV_FILE=""
+TMP_SERVICE_FILE=""
+
+cleanup() {
+  if [[ -n "${TMP_ENV_FILE}" && -f "${TMP_ENV_FILE}" ]]; then
+    rm -f "${TMP_ENV_FILE}"
+  fi
+
+  if [[ -n "${TMP_SERVICE_FILE}" && -f "${TMP_SERVICE_FILE}" ]]; then
+    rm -f "${TMP_SERVICE_FILE}"
+  fi
+}
+
+trap cleanup EXIT
 
 prompt_default() {
   local label="$1"
@@ -33,11 +49,11 @@ prompt_yes_no() {
 }
 
 choose_permission_mode() {
-  echo ""
-  echo "Choose sudo policy for the service user:"
-  echo "  1) none    - no sudo access"
-  echo "  2) limited - systemctl/journalctl/docker/apt"
-  echo "  3) full    - full NOPASSWD sudo"
+  echo "" >&2
+  echo "Choose sudo policy for the service user:" >&2
+  echo "  1) none    - no sudo access" >&2
+  echo "  2) limited - systemctl/journalctl/docker/apt" >&2
+  echo "  3) full    - full NOPASSWD sudo" >&2
   local choice
   read -r -p "Permission mode [1]: " choice
   case "${choice:-1}" in
@@ -52,6 +68,14 @@ require_command() {
   local command_name="$1"
   if ! command -v "${command_name}" >/dev/null 2>&1; then
     echo "Missing required command: ${command_name}" >&2
+    exit 1
+  fi
+}
+
+require_non_root() {
+  if [[ "${EUID}" -eq 0 ]]; then
+    echo "Please run this installer as your normal login user with sudo access." >&2
+    echo "Do not prefix the install command with sudo." >&2
     exit 1
   fi
 }
@@ -147,12 +171,14 @@ EOF
 }
 
 main() {
+  require_non_root
   require_command git
   require_command node
   require_command corepack
 
   echo "== ${SERVICE_NAME} install =="
   echo "Repository: ${REPO_DIR}"
+  echo "Run mode: normal user with sudo prompts"
   echo ""
 
   local app_dir
@@ -169,8 +195,8 @@ main() {
 
   echo ""
   echo "Service user mode:"
-  echo "  1) dedicated service user (recommended)"
-  echo "  2) current login user"
+  echo "  1) dedicated service user"
+  echo "  2) current login user (recommended for admin Codex)"
   local service_user_mode
   read -r -p "Choose service user mode [1]: " service_user_mode
 
@@ -219,6 +245,8 @@ main() {
   sudo mkdir -p "${data_dir}"
   sudo mkdir -p "${admin_workspace}"
   sudo mkdir -p "${family_workspace}"
+  sudo rm -f "${LEGACY_TMP_ENV}" "${LEGACY_TMP_SERVICE}"
+  sudo rm -f "/tmp/${SERVICE_NAME}.env."* "/tmp/${SERVICE_NAME}.service."* 2>/dev/null || true
 
   if [[ "${app_dir}" != "${REPO_DIR}" ]]; then
     require_command rsync
@@ -231,8 +259,11 @@ main() {
     sudo chown -R "$(id -un):$(id -gn)" "${app_dir}"
   fi
 
+  TMP_ENV_FILE="$(mktemp "/tmp/${SERVICE_NAME}.env.XXXXXX")"
+  TMP_SERVICE_FILE="$(mktemp "/tmp/${SERVICE_NAME}.service.XXXXXX")"
+
   write_env_file \
-    "/tmp/${SERVICE_NAME}.env" \
+    "${TMP_ENV_FILE}" \
     "${port}" \
     "${timezone}" \
     "${data_dir}" \
@@ -241,16 +272,18 @@ main() {
     "${admin_workspace}" \
     "${family_workspace}"
 
-  mv "/tmp/${SERVICE_NAME}.env" "${app_dir}/.env"
+  sudo install -m 640 -o root -g "${service_group}" \
+    "${TMP_ENV_FILE}" "${app_dir}/.env"
 
   write_sudoers "${service_user}" "${permission_mode}"
   write_systemd_service \
-    "/tmp/${SERVICE_NAME}.service" \
+    "${TMP_SERVICE_FILE}" \
     "${app_dir}" \
     "${service_user}" \
     "${service_group}"
 
-  sudo mv "/tmp/${SERVICE_NAME}.service" "/etc/systemd/system/${SERVICE_NAME}.service"
+  sudo install -m 644 -o root -g root \
+    "${TMP_SERVICE_FILE}" "/etc/systemd/system/${SERVICE_NAME}.service"
 
   pushd "${app_dir}" >/dev/null
   corepack pnpm install

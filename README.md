@@ -37,6 +37,8 @@ corepack pnpm build
 
 ### Linux 交互式安装
 
+请直接用你自己的普通登录用户运行，不要在命令前面加 `sudo`：
+
 ```bash
 bash infra/scripts/linux/install.sh
 ```
