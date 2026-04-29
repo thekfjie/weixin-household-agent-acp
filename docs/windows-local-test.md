@@ -5,48 +5,56 @@
 - 仓库目录：`E:\program\weixin-household-agent-acp`
 - 目标：先在 Windows 上完成本地联调，再迁移到 Linux 服务器
 
-## 1. 当前默认行为
-
-为了方便 Windows 本地测试，项目默认把运行目录都放在仓库内部：
-
-- 数据目录：`./data`
-- admin 工作目录：`./runtime/codex-admin`
-- family 工作目录：`./runtime/codex-family`
-
-这样本地测试时不需要先准备 `/srv/...` 目录。
-
-如果后面要迁移到 Linux，可以通过环境变量覆盖这些路径。
-
-## 2. 推荐启动方式
+## 推荐入口
 
 直接运行：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\infra\scripts\windows\run-local.ps1
+.\infra\scripts\windows\run-local.cmd
 ```
 
-脚本会做这些事：
+脚本会自动完成：
 
-1. 设置本地 `COREPACK_HOME`
-2. 设置本地 `PNPM_HOME`
-3. 创建 `data` 和 `runtime` 目录
-4. 安装依赖（如果尚未安装）
-5. 执行构建
-6. 启动当前服务
+1. 设置仓库内的 `COREPACK_HOME` 和 `PNPM_HOME`
+2. 创建 `data`、`runtime/codex-admin`、`runtime/codex-family`
+3. 安装依赖
+4. 构建 TypeScript
+5. 如果本地还没有微信账号，打印二维码并等待扫码确认
+6. 启动服务
 
-## 3. 如需手动运行
+已有账号时会自动跳过扫码。
+
+## 常用参数
+
+绑定首个账号为 `admin`，这是默认行为：
 
 ```powershell
-$env:COREPACK_HOME = ".\.corepack"
-$env:PNPM_HOME = ".\.pnpm-home"
-corepack pnpm install
-corepack pnpm build
-node .\dist\apps\server\index.js
+.\infra\scripts\windows\run-local.cmd -Role admin
 ```
 
-## 4. 可覆盖的环境变量
+绑定家人账号：
 
-常用变量如下：
+```powershell
+.\infra\scripts\windows\run-local.cmd -Role family -ForceSetup
+```
+
+只启动，不做扫码检查：
+
+```powershell
+.\infra\scripts\windows\run-local.cmd -SkipSetup
+```
+
+## 默认本地目录
+
+为了方便 Windows 本地测试，项目默认把运行目录放在仓库内部：
+
+- 数据目录：`.\data`
+- admin 工作目录：`.\runtime\codex-admin`
+- family 工作目录：`.\runtime\codex-family`
+
+迁移到 Linux 后可通过 `.env` 或环境变量覆盖这些路径。
+
+## 常用环境变量
 
 - `PORT`
 - `TIMEZONE`
@@ -62,36 +70,27 @@ node .\dist\apps\server\index.js
 - `CODEX_FAMILY_MODE`
 - `CODEX_FAMILY_WORKSPACE`
 
-## 5. Windows 下的 Codex 命令
-
-项目默认会优先使用：
-
-- Windows：`codex.cmd`
-- 非 Windows：`codex`
-
-如果你的本机命令名不同，可以手动设置：
+Windows 默认优先使用 `codex.cmd`。如果你的本机命令不同，可以手动设置：
 
 ```powershell
-$env:CODEX_FAMILY_COMMAND = "codex.cmd"
 $env:CODEX_ADMIN_COMMAND = "codex.cmd"
+$env:CODEX_FAMILY_COMMAND = "codex.cmd"
 ```
 
-## 6. 当前适合验证的内容
-
-现在比较适合在本地先验证这些：
+## 当前适合验证的内容
 
 - 配置读取
 - 数据库初始化
 - 会话创建
+- 终端二维码登录
+- 多账号绑定记录
+- 长轮询 worker 是否能启动
 - Codex 路由预览
-- 文件上传发送模块的入参和出参
-- 二维码登录流程骨架
+- 文件上传发送模块的入参和出口
 
-## 7. 暂未完成的部分
+## 仍需真实环境 E2E 的内容
 
-虽然现在已经适配了 Windows 本地开发，但下面这些还没正式串完：
-
-- 真正可交互的二维码登录命令
-- 真正的长轮询消息循环
-- 真实 Codex 执行与微信消息闭环
+- 服务器上的真实扫码登录
+- 真实微信文本消息收发闭环
+- 真实 Codex 自动回复闭环
 - 真实微信文件发送 smoke test

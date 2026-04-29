@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { AppConfig, CodexMode } from "./types.js";
 
@@ -6,6 +7,53 @@ const VALID_CODEX_MODES: readonly CodexMode[] = [
   "auto-edit",
   "full-auto",
 ];
+
+let dotEnvLoaded = false;
+
+function unquoteEnvValue(value: string): string {
+  const trimmed = value.trim();
+  if (
+    (trimmed.startsWith("\"") && trimmed.endsWith("\"")) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    return trimmed.slice(1, -1);
+  }
+
+  return trimmed;
+}
+
+function loadDotEnvFile(): void {
+  if (dotEnvLoaded) {
+    return;
+  }
+  dotEnvLoaded = true;
+
+  const envPath = path.resolve(".env");
+  if (!fs.existsSync(envPath)) {
+    return;
+  }
+
+  const lines = fs.readFileSync(envPath, "utf8").split(/\r?\n/);
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) {
+      continue;
+    }
+
+    const separatorIndex = trimmed.indexOf("=");
+    if (separatorIndex <= 0) {
+      continue;
+    }
+
+    const key = trimmed.slice(0, separatorIndex).trim();
+    const value = unquoteEnvValue(trimmed.slice(separatorIndex + 1));
+    if (!key || process.env[key] !== undefined) {
+      continue;
+    }
+
+    process.env[key] = value;
+  }
+}
 
 function readEnv(name: string, fallback?: string): string {
   const value = process.env[name] ?? fallback;
@@ -60,6 +108,8 @@ function resolveDefaultCodexWorkspace(name: "admin" | "family"): string {
 }
 
 export function loadConfig(): AppConfig {
+  loadDotEnvFile();
+
   const dataDir = path.resolve(readEnv("DATA_DIR", "./data"));
   const routeTag = process.env.WECHAT_ROUTE_TAG?.trim() || undefined;
 

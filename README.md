@@ -2,85 +2,79 @@
 
 面向家庭共享场景的微信 AI 网关。
 
-当前开发策略很明确：
+目标是让家里人直接在微信里和 AI 聊，同时保留一个高权限 `admin` 身份用于运维、代码和系统任务。服务长期运行在 Linux 服务器上，业务时间统一按北京时间理解。
 
-- 登录和 transport 尽量参考 `CLI-WeChat-Bridge`
-- iLink 协议和媒体链路参考 `openclaw-weixin`、`wechat-ilink-sdk-java`
-- 在这个基础上逐步补多账号、分权、会话管理和 Codex 集成
+## 一键部署
 
-## 当前重点
+在 Linux 服务器上用普通登录用户运行，不要加 `sudo`：
 
-先做最小可用闭环：
+```bash
+curl -fsSL https://raw.githubusercontent.com/thekfjie/weixin-household-agent-acp/main/infra/scripts/linux/bootstrap.sh | bash
+```
 
-1. 微信扫码登录
-2. 凭据持久化
-3. 长轮询收消息
-4. 基础回复
-5. 再接 Codex
+脚本会自动完成：
+
+1. 拉取或更新仓库到 `/opt/weixin-household-agent-acp`
+2. 准备本地 pnpm/corepack 缓存
+3. 安装依赖并构建
+4. 写入 `.env` 和 systemd service
+5. 如果还没有微信账号，停在终端二维码登录；扫码确认后继续
+6. 启动 `weixin-household-agent-acp` 服务
+
+常用覆盖方式：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/thekfjie/weixin-household-agent-acp/main/infra/scripts/linux/bootstrap.sh | PORT=18080 LOGIN_ROLE=admin PERMISSION_MODE=none bash
+```
+
+默认首个扫码账号绑定为 `admin`。后续添加家人账号：
+
+```bash
+cd /opt/weixin-household-agent-acp
+node dist/apps/server/setup.js family --force
+sudo systemctl restart weixin-household-agent-acp
+```
+
+## 本地直接运行
+
+已经 clone 仓库时，Linux/macOS 可直接运行：
+
+```bash
+bash run.sh
+```
+
+Windows 可直接运行：
+
+```powershell
+.\infra\scripts\windows\run-local.cmd
+```
+
+这两个入口都会自动安装依赖、构建、必要时扫码绑定，然后启动服务。已有账号时会跳过扫码。
+
+## 运维命令
+
+```bash
+sudo systemctl status weixin-household-agent-acp
+journalctl -u weixin-household-agent-acp -f
+curl http://127.0.0.1:18080/healthz
+```
+
+卸载：
+
+```bash
+bash /opt/weixin-household-agent-acp/infra/scripts/linux/uninstall.sh --yes
+```
 
 ## 当前能力
 
 - SQLite 持久化
-- iLink API 客户端
+- iLink API client
 - 终端二维码登录命令
 - HTTP 健康检查和管理接口
 - 多账号轮询 worker 骨架
 - 文件发送链路骨架
-
-## 推荐启动方式
-
-### 1. 构建
-
-```bash
-corepack pnpm build
-```
-
-### Linux 交互式安装
-
-请直接用你自己的普通登录用户运行，不要在命令前面加 `sudo`：
-
-```bash
-bash infra/scripts/linux/install.sh
-```
-
-安装脚本会先问：
-
-- 服务运行用户要不要单独创建
-- 打算给这个用户什么 sudo 权限
-- 应用目录、数据目录、端口、时区
-- Codex 命令路径
-
-### Linux 一键卸载
-
-```bash
-bash infra/scripts/linux/uninstall.sh
-```
-
-### 2. 终端扫码登录
-
-默认绑定为 `family` 角色：
-
-```bash
-corepack pnpm run setup
-```
-
-绑定为 `admin`：
-
-```bash
-corepack pnpm run setup -- admin
-```
-
-如果已经有账号，强制继续添加：
-
-```bash
-corepack pnpm run setup -- --force
-```
-
-### 3. 启动服务
-
-```bash
-corepack pnpm start
-```
+- family 输出过滤
+- 北京时间上下文注入
 
 ## 当前接口
 
@@ -92,6 +86,12 @@ corepack pnpm start
 - `GET /api/logins/:id/view`
 - `GET /api/logins/:id/qrcode.png`
 - `POST /api/accounts/:id/role`
+
+## 开发策略
+
+- 登录和 transport 优先参考 `CLI-WeChat-Bridge`
+- iLink 协议和媒体链路参考 `openclaw-weixin`、`wechat-ilink-sdk-java`
+- 先确保登录收发和安装体验，再继续补 Codex 自动回复、文件 E2E、skill/memory
 
 ## 文档
 

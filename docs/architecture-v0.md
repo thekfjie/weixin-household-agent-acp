@@ -532,14 +532,31 @@ v0 优先用宿主机直跑。
 
 ### 16.3 预期命令
 
+v0 的部署入口应尽量傻瓜式。推荐让用户只输入一条命令：
+
 ```bash
-cd /opt
-git clone https://github.com/thekfjie/weixin-household-agent-acp.git
-cd /opt/weixin-household-agent-acp
-pnpm install
-pnpm build
-cp .env.example .env
-pnpm start
+curl -fsSL https://raw.githubusercontent.com/thekfjie/weixin-household-agent-acp/main/infra/scripts/linux/bootstrap.sh | bash
+```
+
+这条命令负责：
+
+1. 拉取或更新仓库到 `/opt/weixin-household-agent-acp`
+2. 准备 pnpm/corepack 本地缓存
+3. 安装依赖并构建
+4. 写入 `.env` 和 `systemd` service
+5. 如果没有已绑定微信账号，在终端打印二维码并等待扫码确认
+6. 扫码完成后继续启动服务
+
+已有本地仓库时，也可以直接运行：
+
+```bash
+bash run.sh
+```
+
+或执行系统安装器：
+
+```bash
+bash infra/scripts/linux/install.sh --yes
 ```
 
 ### 16.4 `systemd` 方向
