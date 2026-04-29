@@ -42,6 +42,31 @@ sudo systemctl status weixin-household-agent-acp
 journalctl -u weixin-household-agent-acp -f
 ```
 
+确认 Codex CLI 可被服务用户非交互调用：
+
+```bash
+whoami
+codex --version
+codex exec --skip-git-repo-check "请用一句话回复：Codex 已接通"
+```
+
+如果这里要求登录，就按提示登录。注意要用 systemd service 里的同一个用户登录。默认安装时通常是当前用户，可以这样确认：
+
+```bash
+systemctl cat weixin-household-agent-acp
+```
+
+如果你已经装过旧版本，现在要更新到最新代码并重启：
+
+```bash
+cd /opt/weixin-household-agent-acp
+git pull
+corepack pnpm install --frozen-lockfile
+corepack pnpm build
+sudo systemctl restart weixin-household-agent-acp
+journalctl -u weixin-household-agent-acp -f
+```
+
 后续要添加家人的微信账号：
 
 ```bash
@@ -154,6 +179,7 @@ bash /opt/weixin-household-agent-acp/infra/scripts/linux/uninstall.sh --yes --ke
 - 文件发送链路骨架
 - family 输出过滤
 - 北京时间上下文注入
+- Codex CLI 非交互回复链路
 
 ## 当前接口
 
@@ -171,6 +197,36 @@ bash /opt/weixin-household-agent-acp/infra/scripts/linux/uninstall.sh --yes --ke
 - 登录和 transport 优先参考 `CLI-WeChat-Bridge`
 - iLink 协议和媒体链路参考 `openclaw-weixin`、`wechat-ilink-sdk-java`
 - 先确保登录收发和安装体验，再继续补 Codex 自动回复、文件 E2E、skill/memory
+
+## Codex 配置
+
+默认调用方式：
+
+```env
+CODEX_ADMIN_COMMAND=codex
+CODEX_ADMIN_ARGS=exec --skip-git-repo-check
+CODEX_FAMILY_COMMAND=codex
+CODEX_FAMILY_ARGS=exec --skip-git-repo-check
+CODEX_TIMEOUT_MS=180000
+```
+
+服务会把微信消息整理成 prompt 后追加到 args 最后，相当于执行：
+
+```bash
+codex exec --skip-git-repo-check "<整理后的微信上下文>"
+```
+
+如需测试 admin 高权限模式，不建议写成默认值；请确认风险后手动改 `/opt/weixin-household-agent-acp/.env`，例如：
+
+```env
+CODEX_ADMIN_ARGS=exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox
+```
+
+改完后重启：
+
+```bash
+sudo systemctl restart weixin-household-agent-acp
+```
 
 ## 文档
 

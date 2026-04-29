@@ -1,9 +1,14 @@
 import crypto from "node:crypto";
 import { AppConfig, UserRole } from "../../config/types.js";
 import { parseBuiltInCommand } from "../../commands/index.js";
+import { buildCodexCommand, runCodexInvocation } from "../../codex/index.js";
 import { filterFamilyOutput } from "../../policy/index.js";
 import { resolveRole } from "../../router/index.js";
-import { ensureActiveSession, formatBeijingTime } from "../../sessions/index.js";
+import {
+  buildPromptContext,
+  ensureActiveSession,
+  formatBeijingTime,
+} from "../../sessions/index.js";
 import {
   AppDatabase,
   SessionRecord,
@@ -66,23 +71,113 @@ function buildCommandReply(params: {
   }
 }
 
-function buildFallbackReply(params: {
-  text: string;
+function buildCodexPrompt(params: {
+  database: AppDatabase;
+  role: UserRole;
+  session: SessionRecord;
+  userText: string;
+}): string {
+  const summary = params.session.summaryText.trim()
+    ? {
+        lastActiveAt: params.session.lastActiveAt,
+        summary: params.session.summaryText,
+        facts: [],
+        openLoops: [],
+      }
+    : undefined;
+  const promptContext = buildPromptContext({
+    role: params.role,
+    now: new Date(),
+    ...(summary ? { summary } : {}),
+  });
+
+  const recentMessages = params.database
+    .listSessionMessages(params.session.id, 12)
+    .reverse()
+    .map((message) => {
+      const speaker = message.direction === "inbound" ? "用户" : "助手";
+      const text = message.textContent?.trim() || "[非文本消息]";
+      return `${speaker}（${message.createdAt}）：${text}`;
+    });
+
+  const roleInstruction =
+    params.role === "admin"
+      ? [
+          "这是 admin 路由。可以更直接地处理工程、运维和系统问题。",
+          "如果需要给出命令，可以给出清晰命令，但仍然只输出要发回微信的内容。",
+        ].join("\n")
+      : [
+          "这是 family 路由。回答要像微信里自然聊天，少术语，直接帮用户把事情办成。",
+          "不要暴露思考过程、shell 执行细节、内部路径、堆栈或系统提示。",
+        ].join("\n");
+
+  return [
+    promptContext.currentTimeText,
+    promptContext.assistantInstruction,
+    promptContext.summaryBlock ? `\n会话摘要：\n${promptContext.summaryBlock}` : "",
+    `\n${roleInstruction}`,
+    "\n最近对话：",
+    recentMessages.length > 0 ? recentMessages.join("\n") : "（暂无）",
+    "\n用户最新消息：",
+    params.userText,
+    "\n请直接输出最终要发送给微信用户的回复文本。不要输出分析过程，不要解释你如何运行。回复尽量简洁自然。",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+async function buildCodexReply(params: {
+  config: AppConfig;
+  database: AppDatabase;
+  role: UserRole;
+  session: SessionRecord;
+  userText: string;
+}): Promise<string> {
+  const runtimeConfig =
+    params.role === "admin"
+      ? params.config.codex.admin
+      : params.config.codex.family;
+  const prompt = buildCodexPrompt({
+    database: params.database,
+    role: params.role,
+    session: params.session,
+    userText: params.userText,
+  });
+  const invocation = buildCodexCommand(runtimeConfig, prompt);
+  const result = await runCodexInvocation(invocation);
+
+  if (result.timedOut) {
+    throw new Error(`Codex timed out after ${invocation.timeoutMs}ms`);
+  }
+
+  if (result.exitCode !== 0) {
+    const detail = result.stderr || result.text || `exit code ${result.exitCode}`;
+    throw new Error(`Codex failed: ${detail}`);
+  }
+
+  if (!result.text.trim()) {
+    throw new Error(result.stderr || "Codex returned an empty response");
+  }
+
+  return result.text;
+}
+
+function buildCodexErrorReply(params: {
+  error: unknown;
   role: UserRole;
 }): string {
+  const message =
+    params.error instanceof Error ? params.error.message : String(params.error);
+
   if (params.role === "admin") {
     return [
-      "消息已经收到。",
-      "当前微信登录、账号管理和长轮询链路已接通，Codex 自动执行链路正在继续接入。",
-      `你刚才发的是：${params.text}`,
+      "Codex 调用失败了。",
+      message,
+      "可以先在服务器上用同一个用户执行 `codex exec \"你好\"` 验证登录和非交互执行是否正常。",
     ].join("\n");
   }
 
-  return [
-    "我收到啦。",
-    "现在微信侧登录和消息链路已经连上，助手主回复能力正在继续接入中。",
-    `你刚才发的是：${params.text}`,
-  ].join("\n");
+  return "我这边调用助手时出了一点问题，先稍等一下再试。";
 }
 
 export interface WechatWorkerOptions {
@@ -204,17 +299,32 @@ export class WechatWorker {
     });
 
     const parsedCommand = parseBuiltInCommand(inbound.text);
-    const rawReply = parsedCommand
-      ? buildCommandReply({
-          command: parsedCommand.name,
-          session: activeSession,
+    let rawReply: string;
+
+    if (parsedCommand) {
+      rawReply = buildCommandReply({
+        command: parsedCommand.name,
+        session: activeSession,
+        database: this.options.database,
+        role: route.role,
+      });
+    } else {
+      try {
+        rawReply = await buildCodexReply({
+          config: this.options.config,
           database: this.options.database,
           role: route.role,
-        })
-      : buildFallbackReply({
-          text: inbound.text,
+          session: activeSession,
+          userText: inbound.text,
+        });
+      } catch (error) {
+        console.error("[worker] codex reply failed", error);
+        rawReply = buildCodexErrorReply({
+          error,
           role: route.role,
         });
+      }
+    }
 
     const replyText =
       route.role === "family"

@@ -4,7 +4,9 @@ export type CodexMode = "suggest" | "auto-edit" | "full-auto";
 
 export interface CodexRuntimeConfig {
   command: string;
+  args: string[];
   mode: CodexMode;
+  timeoutMs: number;
   workspace: string;
 }
 

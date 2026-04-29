@@ -1,8 +1,10 @@
 import { CodexMode } from "../config/types.js";
 
 export interface CodexInvocation {
+  args: string[];
   command: string;
   mode: CodexMode;
+  timeoutMs: number;
   workspace: string;
   prompt: string;
 }
@@ -10,4 +12,11 @@ export interface CodexInvocation {
 export interface CodexPlanPreview {
   argv: string[];
   workspace: string;
+}
+
+export interface CodexRunResult {
+  text: string;
+  stderr: string;
+  exitCode: number | null;
+  timedOut: boolean;
 }

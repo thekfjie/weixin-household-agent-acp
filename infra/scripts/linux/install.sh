@@ -456,12 +456,16 @@ WECHAT_CHANNEL_VERSION=weixin-household-agent-acp-0.1.0
 WECHAT_ROUTE_TAG=
 
 CODEX_ADMIN_COMMAND=${ADMIN_COMMAND}
+CODEX_ADMIN_ARGS=exec --skip-git-repo-check
 CODEX_ADMIN_MODE=full-auto
 CODEX_ADMIN_WORKSPACE=${admin_workspace}
 
 CODEX_FAMILY_COMMAND=${FAMILY_COMMAND}
+CODEX_FAMILY_ARGS=exec --skip-git-repo-check
 CODEX_FAMILY_MODE=suggest
 CODEX_FAMILY_WORKSPACE=${family_workspace}
+
+CODEX_TIMEOUT_MS=180000
 
 FAMILY_STRIP_REASONING=true
 FAMILY_STRIP_COMMANDS=true
@@ -574,11 +578,14 @@ run_node_as_service_user() {
     "WECHAT_CDN_BASE_URL=https://novac2c.cdn.weixin.qq.com/c2c"
     "WECHAT_CHANNEL_VERSION=weixin-household-agent-acp-0.1.0"
     "CODEX_ADMIN_COMMAND=${ADMIN_COMMAND}"
+    "CODEX_ADMIN_ARGS=exec --skip-git-repo-check"
     "CODEX_ADMIN_MODE=full-auto"
     "CODEX_ADMIN_WORKSPACE=${DATA_DIR}/runtime/admin"
     "CODEX_FAMILY_COMMAND=${FAMILY_COMMAND}"
+    "CODEX_FAMILY_ARGS=exec --skip-git-repo-check"
     "CODEX_FAMILY_MODE=suggest"
     "CODEX_FAMILY_WORKSPACE=${DATA_DIR}/runtime/family"
+    "CODEX_TIMEOUT_MS=180000"
     "FAMILY_STRIP_REASONING=true"
     "FAMILY_STRIP_COMMANDS=true"
     "FAMILY_STRIP_PATHS=true"

@@ -7,7 +7,9 @@ export function buildCodexCommand(
 ): CodexInvocation {
   return {
     command: config.command,
+    args: config.args,
     mode: config.mode,
+    timeoutMs: config.timeoutMs,
     workspace: config.workspace,
     prompt,
   };
@@ -18,6 +20,6 @@ export function previewCodexArgv(
 ): CodexPlanPreview {
   return {
     workspace: invocation.workspace,
-    argv: [invocation.command, `--${invocation.mode}`],
+    argv: [invocation.command, ...invocation.args, "<prompt>"],
   };
 }

@@ -97,6 +97,83 @@ function readMode(name: string, fallback: CodexMode): CodexMode {
   return raw;
 }
 
+function readPositiveInteger(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) {
+    return fallback;
+  }
+
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`Environment variable ${name} is not a positive integer: ${raw}`);
+  }
+
+  return parsed;
+}
+
+function splitCommandArgs(raw: string): string[] {
+  const args: string[] = [];
+  let current = "";
+  let quote: "\"" | "'" | undefined;
+  let escaping = false;
+
+  for (const char of raw) {
+    if (escaping) {
+      current += char;
+      escaping = false;
+      continue;
+    }
+
+    if (char === "\\") {
+      escaping = true;
+      continue;
+    }
+
+    if (quote) {
+      if (char === quote) {
+        quote = undefined;
+      } else {
+        current += char;
+      }
+      continue;
+    }
+
+    if (char === "\"" || char === "'") {
+      quote = char;
+      continue;
+    }
+
+    if (/\s/.test(char)) {
+      if (current) {
+        args.push(current);
+        current = "";
+      }
+      continue;
+    }
+
+    current += char;
+  }
+
+  if (escaping) {
+    current += "\\";
+  }
+
+  if (quote) {
+    throw new Error(`Unclosed quote in command args: ${raw}`);
+  }
+
+  if (current) {
+    args.push(current);
+  }
+
+  return args;
+}
+
+function readCodexArgs(name: string): string[] {
+  const raw = process.env[name]?.trim();
+  return raw ? splitCommandArgs(raw) : ["exec", "--skip-git-repo-check"];
+}
+
 function resolveDefaultCodexCommand(): string {
   return process.platform === "win32" ? "codex.cmd" : "codex";
 }
@@ -112,6 +189,9 @@ export function loadConfig(): AppConfig {
 
   const dataDir = path.resolve(readEnv("DATA_DIR", "./data"));
   const routeTag = process.env.WECHAT_ROUTE_TAG?.trim() || undefined;
+  const adminMode = readMode("CODEX_ADMIN_MODE", "full-auto");
+  const familyMode = readMode("CODEX_FAMILY_MODE", "suggest");
+  const codexTimeoutMs = readPositiveInteger("CODEX_TIMEOUT_MS", 180_000);
 
   return {
     server: {
@@ -134,7 +214,12 @@ export function loadConfig(): AppConfig {
     codex: {
       admin: {
         command: readEnv("CODEX_ADMIN_COMMAND", resolveDefaultCodexCommand()),
-        mode: readMode("CODEX_ADMIN_MODE", "full-auto"),
+        args: readCodexArgs("CODEX_ADMIN_ARGS"),
+        mode: adminMode,
+        timeoutMs: readPositiveInteger(
+          "CODEX_ADMIN_TIMEOUT_MS",
+          codexTimeoutMs,
+        ),
         workspace: path.resolve(
           readEnv(
             "CODEX_ADMIN_WORKSPACE",
@@ -144,7 +229,12 @@ export function loadConfig(): AppConfig {
       },
       family: {
         command: readEnv("CODEX_FAMILY_COMMAND", resolveDefaultCodexCommand()),
-        mode: readMode("CODEX_FAMILY_MODE", "suggest"),
+        args: readCodexArgs("CODEX_FAMILY_ARGS"),
+        mode: familyMode,
+        timeoutMs: readPositiveInteger(
+          "CODEX_FAMILY_TIMEOUT_MS",
+          codexTimeoutMs,
+        ),
         workspace: path.resolve(
           readEnv(
             "CODEX_FAMILY_WORKSPACE",
