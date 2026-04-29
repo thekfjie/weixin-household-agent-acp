@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import {
   ILinkMessage,
+  ILinkMessageItem,
   ILinkMessageItemType,
   ILinkMessageType,
 } from "./protocol.js";
@@ -16,6 +17,64 @@ export interface NormalizedInboundWechatMessage {
 
 function buildFallbackMessageId(input: string): string {
   return crypto.createHash("sha1").update(input, "utf8").digest("hex");
+}
+
+function decodeXmlText(value: string): string {
+  return value
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, "\"")
+    .replace(/&#39;/g, "'");
+}
+
+function extractXmlTag(xml: string, tagName: string): string {
+  const pattern = new RegExp(`<${tagName}>\\s*(?:<!\\[CDATA\\[)?([\\s\\S]*?)(?:\\]\\]>)?\\s*</${tagName}>`, "i");
+  return decodeXmlText(pattern.exec(xml)?.[1]?.trim() ?? "");
+}
+
+function summarizeArticleXml(text: string): string | undefined {
+  if (!text.includes("<appmsg") && !text.includes("<url>")) {
+    return undefined;
+  }
+
+  const title = extractXmlTag(text, "title");
+  const url = extractXmlTag(text, "url");
+  const description = extractXmlTag(text, "des");
+  if (!title && !url) {
+    return undefined;
+  }
+
+  return [
+    "[收到公众号/链接卡片]",
+    title ? `标题：${title}` : "",
+    description ? `描述：${description}` : "",
+    url ? `链接：${url}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function summarizeMessageItem(item: ILinkMessageItem): string {
+  switch (item.type) {
+    case ILinkMessageItemType.TEXT: {
+      const text = item.text_item?.text?.trim() ?? "";
+      return summarizeArticleXml(text) ?? text;
+    }
+    case ILinkMessageItemType.IMAGE:
+      return "[收到图片]";
+    case ILinkMessageItemType.VOICE:
+      return "[收到语音]";
+    case ILinkMessageItemType.FILE: {
+      const fileName = item.file_item?.file_name?.trim() || "未命名文件";
+      const size = item.file_item?.len ? `，大小 ${item.file_item.len} 字节` : "";
+      return `[收到文件：${fileName}${size}]`;
+    }
+    case ILinkMessageItemType.VIDEO:
+      return "[收到视频]";
+    default:
+      return item.type ? `[收到暂不支持的消息类型：${item.type}]` : "";
+  }
 }
 
 export function normalizeInboundWechatMessages(params: {
@@ -38,8 +97,7 @@ export function normalizeInboundWechatMessages(params: {
     }
 
     const text = (message.item_list ?? [])
-      .filter((item) => item.type === ILinkMessageItemType.TEXT)
-      .map((item) => item.text_item?.text?.trim() ?? "")
+      .map(summarizeMessageItem)
       .filter(Boolean)
       .join("\n")
       .trim();

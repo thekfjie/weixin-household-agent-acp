@@ -54,6 +54,14 @@ if (-not $env:CODEX_FAMILY_COMMAND) {
   $env:CODEX_FAMILY_COMMAND = $env:CODEX_ADMIN_COMMAND
 }
 
+if (-not $env:CODEX_ADMIN_ENV_MODE) {
+  $env:CODEX_ADMIN_ENV_MODE = "inherit"
+}
+
+if (-not $env:CODEX_FAMILY_ENV_MODE) {
+  $env:CODEX_FAMILY_ENV_MODE = "minimal"
+}
+
 if (-not $env:TIMEZONE) {
   $env:TIMEZONE = "Asia/Shanghai"
 }

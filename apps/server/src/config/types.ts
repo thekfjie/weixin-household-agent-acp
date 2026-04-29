@@ -1,6 +1,7 @@
 export type UserRole = "admin" | "family";
 
 export type CodexMode = "suggest" | "auto-edit" | "full-auto";
+export type CodexEnvMode = "inherit" | "minimal";
 
 export interface CodexRuntimeConfig {
   command: string;
@@ -8,6 +9,8 @@ export interface CodexRuntimeConfig {
   mode: CodexMode;
   timeoutMs: number;
   workspace: string;
+  envMode: CodexEnvMode;
+  envPassthrough: string[];
 }
 
 export interface FamilyPolicyConfig {

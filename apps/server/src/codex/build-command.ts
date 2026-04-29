@@ -8,6 +8,8 @@ export function buildCodexCommand(
   return {
     command: config.command,
     args: config.args,
+    envMode: config.envMode,
+    envPassthrough: config.envPassthrough,
     mode: config.mode,
     timeoutMs: config.timeoutMs,
     workspace: config.workspace,

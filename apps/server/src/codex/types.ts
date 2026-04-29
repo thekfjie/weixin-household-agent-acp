@@ -3,6 +3,8 @@ import { CodexMode } from "../config/types.js";
 export interface CodexInvocation {
   args: string[];
   command: string;
+  envMode: "inherit" | "minimal";
+  envPassthrough: string[];
   mode: CodexMode;
   timeoutMs: number;
   workspace: string;

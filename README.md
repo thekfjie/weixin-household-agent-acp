@@ -56,6 +56,13 @@ codex exec --skip-git-repo-check "请用一句话回复：Codex 已接通"
 systemctl cat weixin-household-agent-acp
 ```
 
+运行自检：
+
+```bash
+cd /opt/weixin-household-agent-acp
+node dist/apps/server/doctor.js
+```
+
 如果你已经装过旧版本，现在要更新到最新代码并重启：
 
 ```bash
@@ -73,6 +80,15 @@ journalctl -u weixin-household-agent-acp -f
 cd /opt/weixin-household-agent-acp
 node dist/apps/server/setup.js family --force
 sudo systemctl restart weixin-household-agent-acp
+```
+
+账号管理：
+
+```bash
+node dist/apps/server/accounts.js list
+node dist/apps/server/accounts.js role <account_id> family
+node dist/apps/server/accounts.js disable <account_id>
+node dist/apps/server/accounts.js enable <account_id>
 ```
 
 发送文件测试：
@@ -199,6 +215,10 @@ bash /opt/weixin-household-agent-acp/infra/scripts/linux/uninstall.sh --yes --ke
 - 北京时间上下文注入
 - Codex CLI 非交互回复链路
 - Codex 回复期间尝试显示微信“正在输入中”
+- family Codex 子进程默认最小环境变量
+- OpenAI-compatible API 中转 wrapper
+- 账号管理 CLI 和 doctor 自检 CLI
+- 收到图片/语音/文件/视频时转成文本摘要进入对话
 
 ## 当前接口
 
@@ -229,6 +249,20 @@ CODEX_FAMILY_ARGS=exec --skip-git-repo-check
 CODEX_TIMEOUT_MS=180000
 ```
 
+默认环境隔离：
+
+```env
+CODEX_ADMIN_ENV_MODE=inherit
+CODEX_FAMILY_ENV_MODE=minimal
+CODEX_FAMILY_ENV_PASSTHROUGH=
+```
+
+`family` 默认只继承 PATH、HOME、TMP 等运行必需环境变量，不继承服务进程里的 API key、内部配置和其他敏感变量。确实需要给 family 的 wrapper 放行变量时，用英文逗号白名单：
+
+```env
+CODEX_FAMILY_ENV_PASSTHROUGH=CODEX_API_BASE_URL,CODEX_API_KEY,CODEX_API_MODEL
+```
+
 服务会把微信消息整理成 prompt 后追加到 args 最后，相当于执行：
 
 ```bash
@@ -250,13 +284,17 @@ sudo systemctl restart weixin-household-agent-acp
 如果后续要切到你的 API 中转站，推荐先做一个本地 wrapper 脚本，让本项目仍然只调用一个命令。比如把 `.env` 改成：
 
 ```env
-CODEX_ADMIN_COMMAND=/opt/weixin-household-agent-acp/runtime/codex-api-wrapper.sh
-CODEX_ADMIN_ARGS=
-CODEX_FAMILY_COMMAND=/opt/weixin-household-agent-acp/runtime/codex-api-wrapper.sh
-CODEX_FAMILY_ARGS=--family
+CODEX_ADMIN_COMMAND=node
+CODEX_ADMIN_ARGS=dist/apps/server/codex-api-wrapper.js
+CODEX_FAMILY_COMMAND=node
+CODEX_FAMILY_ARGS=dist/apps/server/codex-api-wrapper.js --family
+CODEX_API_BASE_URL=https://你的中转站/v1
+CODEX_API_KEY=你的中转站密钥
+CODEX_API_MODEL=你的模型名
+CODEX_FAMILY_ENV_PASSTHROUGH=CODEX_API_BASE_URL,CODEX_API_KEY,CODEX_API_MODEL
 ```
 
-wrapper 从最后一个参数读取本项目整理好的 prompt，再调用你的中转站 API。这样微信 transport、权限、会话和文件链路都不用改，只替换 AI 后端。
+内置 wrapper 从最后一个参数读取本项目整理好的 prompt，再调用 OpenAI-compatible `/chat/completions` 中转站 API。这样微信 transport、权限、会话和文件链路都不用改，只替换 AI 后端。
 
 ## 文件发送
 
@@ -302,6 +340,8 @@ FILE_SEND_MAX_BYTES=52428800
 ```
 
 如果要允许更多目录，改 `/opt/weixin-household-agent-acp/.env` 后重启服务。服务器本地 `send-file.js` CLI 默认不受这个白名单限制，因为能 SSH 到服务器本身就已经是运维权限。
+
+接收侧目前会把图片、语音、文件、视频转成文字摘要交给 AI，例如“收到文件：xxx.pdf”。如果微信/iLink 把公众号文章卡片以 XML 文本交给我们，会尽量提取标题、描述和链接；但当前公开 iLink 消息结构没有正式列出公众号文章类型，OpenClaw 社区里这仍是开放需求，所以不能保证所有公众号转发都能收到。
 
 ## 正在输入中
 

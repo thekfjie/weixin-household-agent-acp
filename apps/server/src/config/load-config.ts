@@ -1,13 +1,14 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { AppConfig, CodexMode } from "./types.js";
+import { AppConfig, CodexEnvMode, CodexMode } from "./types.js";
 
 const VALID_CODEX_MODES: readonly CodexMode[] = [
   "suggest",
   "auto-edit",
   "full-auto",
 ];
+const VALID_CODEX_ENV_MODES: readonly CodexEnvMode[] = ["inherit", "minimal"];
 
 let dotEnvLoaded = false;
 
@@ -93,6 +94,15 @@ function readMode(name: string, fallback: CodexMode): CodexMode {
   const raw = (process.env[name] ?? fallback) as CodexMode;
   if (!VALID_CODEX_MODES.includes(raw)) {
     throw new Error(`Environment variable ${name} is not a valid Codex mode: ${raw}`);
+  }
+
+  return raw;
+}
+
+function readEnvMode(name: string, fallback: CodexEnvMode): CodexEnvMode {
+  const raw = (process.env[name] ?? fallback) as CodexEnvMode;
+  if (!VALID_CODEX_ENV_MODES.includes(raw)) {
+    throw new Error(`Environment variable ${name} is not a valid Codex env mode: ${raw}`);
   }
 
   return raw;
@@ -184,6 +194,18 @@ function readPathList(name: string, fallback: string[]): string[] {
   return [...new Set(values.map((item) => path.resolve(item)))];
 }
 
+function readNameList(name: string): string[] {
+  const raw = process.env[name]?.trim();
+  if (!raw) {
+    return [];
+  }
+
+  return raw
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 function resolveDefaultCodexCommand(): string {
   return process.platform === "win32" ? "codex.cmd" : "codex";
 }
@@ -240,6 +262,8 @@ export function loadConfig(): AppConfig {
             resolveDefaultCodexWorkspace("admin"),
           ),
         ),
+        envMode: readEnvMode("CODEX_ADMIN_ENV_MODE", "inherit"),
+        envPassthrough: readNameList("CODEX_ADMIN_ENV_PASSTHROUGH"),
       },
       family: {
         command: readEnv("CODEX_FAMILY_COMMAND", resolveDefaultCodexCommand()),
@@ -255,6 +279,8 @@ export function loadConfig(): AppConfig {
             resolveDefaultCodexWorkspace("family"),
           ),
         ),
+        envMode: readEnvMode("CODEX_FAMILY_ENV_MODE", "minimal"),
+        envPassthrough: readNameList("CODEX_FAMILY_ENV_PASSTHROUGH"),
       },
     },
     familyPolicy: {

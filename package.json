@@ -13,6 +13,9 @@
     "check": "tsc -p apps/server/tsconfig.json --noEmit",
     "setup": "node dist/apps/server/setup.js",
     "wechat:setup": "node dist/apps/server/setup.js",
+    "accounts": "node dist/apps/server/accounts.js",
+    "doctor": "node dist/apps/server/doctor.js",
+    "codex:api-wrapper": "node dist/apps/server/codex-api-wrapper.js",
     "file:send": "node dist/apps/server/send-file.js",
     "start": "node dist/apps/server/index.js",
     "dev": "node --enable-source-maps --watch dist/apps/server/index.js"

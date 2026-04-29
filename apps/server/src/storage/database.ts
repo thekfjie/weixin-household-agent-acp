@@ -199,6 +199,30 @@ export class AppDatabase {
     return updated;
   }
 
+  updateAccountStatus(accountId: string, status: string): WechatAccountRecord {
+    const existing = this.getAccountById(accountId);
+    if (!existing) {
+      throw new Error(`Account not found: ${accountId}`);
+    }
+
+    this.db
+      .prepare(
+        `
+        UPDATE wechat_accounts
+        SET status = ?, updated_at = ?
+        WHERE id = ?
+        `,
+      )
+      .run(status, createNow(), accountId);
+
+    const updated = this.getAccountById(accountId);
+    if (!updated) {
+      throw new Error(`Failed to update account status: ${accountId}`);
+    }
+
+    return updated;
+  }
+
   getPollingCursor(accountId: string): string | undefined {
     const statement = this.db.prepare(
       "SELECT cursor FROM polling_state WHERE wechat_account_id = ?",

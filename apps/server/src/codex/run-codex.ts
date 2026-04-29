@@ -3,6 +3,25 @@ import fs from "node:fs";
 import { CodexInvocation, CodexRunResult } from "./types.js";
 
 const MAX_OUTPUT_BYTES = 512 * 1024;
+const MINIMAL_ENV_KEYS = [
+  "PATH",
+  "Path",
+  "HOME",
+  "USER",
+  "USERNAME",
+  "LOGNAME",
+  "SHELL",
+  "LANG",
+  "LC_ALL",
+  "TMPDIR",
+  "TEMP",
+  "TMP",
+  "SystemRoot",
+  "ComSpec",
+  "APPDATA",
+  "LOCALAPPDATA",
+  "USERPROFILE",
+] as const;
 
 function trimOutput(value: string): string {
   return value.replace(/\r\n/g, "\n").trim();
@@ -86,6 +105,29 @@ function normalizeCodexStdout(stdout: string): string {
   return trimOutput(stdout);
 }
 
+function buildChildEnv(invocation: CodexInvocation): NodeJS.ProcessEnv {
+  if (invocation.envMode === "inherit") {
+    return process.env;
+  }
+
+  const env: NodeJS.ProcessEnv = {};
+  for (const key of MINIMAL_ENV_KEYS) {
+    const value = process.env[key];
+    if (value !== undefined) {
+      env[key] = value;
+    }
+  }
+
+  for (const key of invocation.envPassthrough) {
+    const value = process.env[key];
+    if (value !== undefined) {
+      env[key] = value;
+    }
+  }
+
+  return env;
+}
+
 export async function runCodexInvocation(
   invocation: CodexInvocation,
 ): Promise<CodexRunResult> {
@@ -98,7 +140,7 @@ export async function runCodexInvocation(
   return new Promise((resolve, reject) => {
     const child = spawn(invocation.command, args, {
       cwd: invocation.workspace,
-      env: process.env,
+      env: buildChildEnv(invocation),
       shell: process.platform === "win32",
       stdio: ["ignore", "pipe", "pipe"],
     });
