@@ -3,7 +3,7 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { loadConfig } from "./config/index.js";
-import { buildAcpEnv } from "./codex/acp-connection.js";
+import { hasAcpEnvAuth } from "./codex/acp-connection.js";
 import { AppDatabase } from "./storage/index.js";
 import { CodexRuntimeConfig } from "./config/types.js";
 
@@ -96,12 +96,19 @@ function checkAcpAuth(name: string, config: CodexRuntimeConfig): CheckResult {
     return ok(name, "not enabled");
   }
 
-  const env = buildAcpEnv(config);
-  const hasOpenAiKey = Boolean(env.OPENAI_API_KEY);
-  const hasCodexKey = Boolean(env.CODEX_API_KEY);
-  const detail = `OPENAI_API_KEY=${hasOpenAiKey}, CODEX_API_KEY=${hasCodexKey}`;
+  const hasEnvAuth = hasAcpEnvAuth(config);
+  const detail = `CODEX_*_ACP_AUTH_MODE=${config.acpAuthMode}, env_key=${hasEnvAuth}`;
 
-  return hasOpenAiKey || hasCodexKey
+  if (config.acpAuthMode !== "env") {
+    return ok(
+      name,
+      hasEnvAuth
+        ? `${detail}; will use env auth`
+        : `${detail}; will rely on codex-acp agent login state`,
+    );
+  }
+
+  return hasEnvAuth
     ? ok(name, detail)
     : fail(
         name,

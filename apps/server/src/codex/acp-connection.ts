@@ -120,6 +120,11 @@ export function selectAcpAuthMethod(
   return undefined;
 }
 
+export function hasAcpEnvAuth(config: CodexRuntimeConfig): boolean {
+  const env = buildAcpEnv(config);
+  return Boolean(env.OPENAI_API_KEY || env.CODEX_API_KEY);
+}
+
 function describeAuthMethods(
   methods: AuthMethod[] | undefined,
   env: NodeJS.ProcessEnv,
@@ -269,7 +274,10 @@ export class AcpConnection {
       `[codex:acp] auth methods: ${describeAuthMethods(authMethods, env)}`,
     );
 
-    const authMethod = selectAcpAuthMethod(authMethods, env);
+    const authMethod =
+      this.config.acpAuthMode === "none"
+        ? undefined
+        : selectAcpAuthMethod(authMethods, env);
     if (authMethod) {
       await Promise.race([
         conn.authenticate({ methodId: authMethod.id }),
@@ -278,10 +286,14 @@ export class AcpConnection {
       console.log(
         `[codex:acp] authenticated with ${authMethod.name} (${authMethod.id})`,
       );
-    } else if (authMethods.length > 0) {
+    } else if (authMethods.length > 0 && this.config.acpAuthMode === "env") {
       const required = requiredAuthEnvVars(authMethods).join(" or ");
       throw new Error(
         `Set ${required || "OPENAI_API_KEY or CODEX_API_KEY"} in the service environment for codex-acp`,
+      );
+    } else if (authMethods.length > 0) {
+      console.log(
+        `[codex:acp] skipping explicit authenticate (CODEX_*_ACP_AUTH_MODE=${this.config.acpAuthMode}); relying on agent login state`,
       );
     }
 

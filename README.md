@@ -260,27 +260,47 @@ CODEX_TIMEOUT_MS=180000
 CODEX_ADMIN_BACKEND=acp
 CODEX_ADMIN_ACP_COMMAND=
 CODEX_ADMIN_ACP_ARGS=
+CODEX_ADMIN_ACP_AUTH_MODE=auto
 CODEX_FAMILY_BACKEND=acp
 CODEX_FAMILY_ACP_COMMAND=
 CODEX_FAMILY_ACP_ARGS=
+CODEX_FAMILY_ACP_AUTH_MODE=auto
 ```
 
 `CODEX_*_ACP_COMMAND` 留空时会优先使用项目依赖里的 `node_modules/.bin/codex-acp`，通常不需要全局安装。ACP 后端会为每个微信会话维护一个 ACP session，并收集 `agent_message_chunk` 流式输出后再发回微信。`/new` 或 `/reset` 会清掉对应的 ACP session 映射。当前映射是进程内的，服务重启后会重新建 session；这已经能避免每条消息都冷启动，但还不是跨重启持久恢复。
 
 权限说明：本项目的 ACP client 默认拒绝 agent 的权限请求，不会自动批准工具调用。这样 family 链路更安全；admin 如果以后要开放更强工具权限，需要再明确配置。
 
-认证说明：`codex-acp` 的非交互后台进程不能稳定复用 `codex exec` 的 ChatGPT 登录态。ACP 后端启动 `codex-acp` 时，会补齐服务用户的 `HOME` / `CODEX_HOME`，并按下面顺序准备非交互 key：
+认证说明：ACP 后端有三种认证策略：
+
+```env
+CODEX_ADMIN_ACP_AUTH_MODE=auto
+```
+
+- `auto`：默认。先看有没有可用 API key；有就显式调用 ACP `authenticate`，没有就不主动认证，交给 `codex-acp` 自己读取官方登录态。这更接近 `wong2/weixin-agent-sdk` 的行为。
+- `env`：严格后台模式。必须有 `OPENAI_API_KEY` 或 `CODEX_API_KEY`，否则直接报错，不尝试官方登录态。
+- `none`：完全不调用 ACP `authenticate`，只依赖 agent 自己的登录态。
+
+ACP 后端启动 `codex-acp` 时，会补齐服务用户的 `HOME` / `CODEX_HOME`，并按下面顺序准备非交互 key：
 
 1. `.env` 里的 `CODEX_CLI_API_KEY`
 2. `.env` 里的 `OPENAI_API_KEY` / `CODEX_API_KEY`
 3. 服务用户 `~/.codex/auth.json` 里的 `OPENAI_API_KEY` / `CODEX_API_KEY`
 
-随后它只会选择已经满足环境变量条件的 `env_var` auth method，并调用 ACP `authenticate`。如果没有可用 key，会直接报 `Set OPENAI_API_KEY or CODEX_API_KEY in the service environment for codex-acp`，不会退回到 `chatgpt` 这种需要交互登录的分支。
+在 `auto` 模式下，如果没有可用 key，它会跳过显式认证并继续 `newSession`；如果 `codex-acp` 能复用官方登录态，就可以不放 key。只有 `env` 模式会强制要求 key。
 
-所以启用 ACP 时，最简单的配置是在 `/opt/weixin-household-agent-acp/.env` 里填：
+所以启用 ACP 且想复用官方登录时，先试：
 
 ```env
 CODEX_ADMIN_BACKEND=acp
+CODEX_ADMIN_ACP_AUTH_MODE=auto
+```
+
+如果你的 `codex-acp` 环境不能复用官方登录态，再改用 key：
+
+```env
+CODEX_ADMIN_BACKEND=acp
+CODEX_ADMIN_ACP_AUTH_MODE=env
 CODEX_CLI_API_KEY=sk-你的key
 ```
 

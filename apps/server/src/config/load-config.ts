@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   AppConfig,
+  CodexAcpAuthMode,
   CodexBackendKind,
   CodexEnvMode,
   CodexMode,
@@ -15,6 +16,11 @@ const VALID_CODEX_MODES: readonly CodexMode[] = [
 ];
 const VALID_CODEX_ENV_MODES: readonly CodexEnvMode[] = ["inherit", "minimal"];
 const VALID_CODEX_BACKENDS: readonly CodexBackendKind[] = ["cli", "acp"];
+const VALID_CODEX_ACP_AUTH_MODES: readonly CodexAcpAuthMode[] = [
+  "auto",
+  "env",
+  "none",
+];
 
 let dotEnvLoaded = false;
 
@@ -123,6 +129,20 @@ function readBackend(name: string, fallback: CodexBackendKind): CodexBackendKind
   const raw = (process.env[name] ?? fallback) as CodexBackendKind;
   if (!VALID_CODEX_BACKENDS.includes(raw)) {
     throw new Error(`Environment variable ${name} is not a valid Codex backend: ${raw}`);
+  }
+
+  return raw;
+}
+
+function readAcpAuthMode(
+  name: string,
+  fallback: CodexAcpAuthMode,
+): CodexAcpAuthMode {
+  const raw = (process.env[name] ?? fallback) as CodexAcpAuthMode;
+  if (!VALID_CODEX_ACP_AUTH_MODES.includes(raw)) {
+    throw new Error(
+      `Environment variable ${name} is not a valid Codex ACP auth mode: ${raw}`,
+    );
   }
 
   return raw;
@@ -265,6 +285,7 @@ export function loadConfig(): AppConfig {
   const adminMode = readMode("CODEX_ADMIN_MODE", "full-auto");
   const familyMode = readMode("CODEX_FAMILY_MODE", "suggest");
   const codexBackend = readBackend("CODEX_BACKEND", "cli");
+  const codexAcpAuthMode = readAcpAuthMode("CODEX_ACP_AUTH_MODE", "auto");
   const codexTimeoutMs = readPositiveInteger("CODEX_TIMEOUT_MS", 180_000);
   const fileAllowedDirs = readPathList("FILE_SEND_ALLOWED_DIRS", [
     path.join(dataDir, "outbox"),
@@ -299,6 +320,10 @@ export function loadConfig(): AppConfig {
           resolveDefaultAcpCommand(),
         ),
         acpArgs: readAcpArgs("CODEX_ADMIN_ACP_ARGS"),
+        acpAuthMode: readAcpAuthMode(
+          "CODEX_ADMIN_ACP_AUTH_MODE",
+          codexAcpAuthMode,
+        ),
         mode: adminMode,
         timeoutMs: readPositiveInteger(
           "CODEX_ADMIN_TIMEOUT_MS",
@@ -322,6 +347,10 @@ export function loadConfig(): AppConfig {
           resolveDefaultAcpCommand(),
         ),
         acpArgs: readAcpArgs("CODEX_FAMILY_ACP_ARGS"),
+        acpAuthMode: readAcpAuthMode(
+          "CODEX_FAMILY_ACP_AUTH_MODE",
+          codexAcpAuthMode,
+        ),
         mode: familyMode,
         timeoutMs: readPositiveInteger(
           "CODEX_FAMILY_TIMEOUT_MS",
