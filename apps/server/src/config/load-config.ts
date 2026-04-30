@@ -73,6 +73,11 @@ function readEnv(name: string, fallback?: string): string {
   return value;
 }
 
+function readOptionalEnv(name: string, fallback: string): string {
+  const value = process.env[name]?.trim();
+  return value || fallback;
+}
+
 function readBoolean(name: string, fallback: boolean): boolean {
   const raw = process.env[name];
   if (!raw) {
@@ -234,7 +239,16 @@ function resolveDefaultCodexCommand(): string {
 }
 
 function resolveDefaultAcpCommand(): string {
-  return process.platform === "win32" ? "codex-acp.cmd" : "codex-acp";
+  const localBin = path.resolve(
+    "node_modules",
+    ".bin",
+    process.platform === "win32" ? "codex-acp.CMD" : "codex-acp",
+  );
+  return fs.existsSync(localBin)
+    ? localBin
+    : process.platform === "win32"
+      ? "codex-acp.cmd"
+      : "codex-acp";
 }
 
 function resolveDefaultCodexWorkspace(name: "admin" | "family"): string {
@@ -280,7 +294,10 @@ export function loadConfig(): AppConfig {
         backend: readBackend("CODEX_ADMIN_BACKEND", codexBackend),
         command: readEnv("CODEX_ADMIN_COMMAND", resolveDefaultCodexCommand()),
         args: readCodexArgs("CODEX_ADMIN_ARGS"),
-        acpCommand: readEnv("CODEX_ADMIN_ACP_COMMAND", resolveDefaultAcpCommand()),
+        acpCommand: readOptionalEnv(
+          "CODEX_ADMIN_ACP_COMMAND",
+          resolveDefaultAcpCommand(),
+        ),
         acpArgs: readAcpArgs("CODEX_ADMIN_ACP_ARGS"),
         mode: adminMode,
         timeoutMs: readPositiveInteger(
@@ -300,7 +317,10 @@ export function loadConfig(): AppConfig {
         backend: readBackend("CODEX_FAMILY_BACKEND", codexBackend),
         command: readEnv("CODEX_FAMILY_COMMAND", resolveDefaultCodexCommand()),
         args: readCodexArgs("CODEX_FAMILY_ARGS"),
-        acpCommand: readEnv("CODEX_FAMILY_ACP_COMMAND", resolveDefaultAcpCommand()),
+        acpCommand: readOptionalEnv(
+          "CODEX_FAMILY_ACP_COMMAND",
+          resolveDefaultAcpCommand(),
+        ),
         acpArgs: readAcpArgs("CODEX_FAMILY_ACP_ARGS"),
         mode: familyMode,
         timeoutMs: readPositiveInteger(
