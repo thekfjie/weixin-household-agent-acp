@@ -269,6 +269,16 @@ CODEX_FAMILY_ACP_ARGS=
 
 权限说明：本项目的 ACP client 默认拒绝 agent 的权限请求，不会自动批准工具调用。这样 family 链路更安全；admin 如果以后要开放更强工具权限，需要再明确配置。
 
+认证说明：ACP 后端启动 `codex-acp` 时，会补齐服务用户的 `HOME` / `CODEX_HOME`，并尝试从 `~/.codex/auth.json` 读取 `OPENAI_API_KEY` / `CODEX_API_KEY` 传给 ACP 子进程，然后按 ACP 协议调用 `authenticate`。所以切 ACP 后要用运行 systemd 的同一个用户先完成 `codex login` 或 `configure-codex.js --apply`。如果微信里出现 `Authentication required`，优先检查 `systemctl cat weixin-household-agent-acp` 里的 `User=`，再用这个用户执行：
+
+```bash
+cd /opt/weixin-household-agent-acp
+codex exec --skip-git-repo-check "你好"
+node dist/apps/server/doctor.js
+```
+
+不要把命令包在反引号里。Bash 中 `` `codex exec "你好"` `` 表示“先执行 Codex，再把 Codex 的输出当成下一条命令执行”，所以会看到类似 `你好。有什么需要我处理的？: command not found` 的误报。
+
 ### Codex CLI 的官方登录 / API key 模式
 
 推荐让本项目始终调用 `codex exec`，然后用同一个服务用户的 `~/.codex/config.toml` 决定 Codex CLI 走官方登录还是 sub2api/API key。

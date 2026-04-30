@@ -1,10 +1,15 @@
 import { spawn, ChildProcess } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { Readable, Writable } from "node:stream";
 import {
   ClientSideConnection,
   ndJsonStream,
   PROTOCOL_VERSION,
   SessionId,
+  type AuthMethod,
+  type AuthMethodEnvVar,
 } from "@agentclientprotocol/sdk";
 import { CodexRuntimeConfig } from "../config/types.js";
 import { buildChildEnv } from "./run-codex.js";
@@ -16,6 +21,100 @@ function describeToolCall(update: {
   toolCallId?: string;
 }): string {
   return update.title ?? update.kind ?? update.toolCallId ?? "tool";
+}
+
+function defaultHome(): string | undefined {
+  const home = os.homedir();
+  if (home && home !== ".") {
+    return home;
+  }
+
+  return process.env.HOME ?? process.env.USERPROFILE;
+}
+
+function readCodexAuthJson(env: NodeJS.ProcessEnv): Record<string, string> {
+  const codexHome =
+    env.CODEX_HOME ??
+    (env.HOME ? path.join(env.HOME, ".codex") : undefined) ??
+    (env.USERPROFILE ? path.join(env.USERPROFILE, ".codex") : undefined);
+
+  if (!codexHome) {
+    return {};
+  }
+
+  const authPath = path.join(codexHome, "auth.json");
+  try {
+    const parsed = JSON.parse(fs.readFileSync(authPath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    const result: Record<string, string> = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      if (typeof value === "string" && value) {
+        result[key] = value;
+      }
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+
+function buildAcpEnv(config: CodexRuntimeConfig): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...buildChildEnv(config) };
+  const home = env.HOME ?? env.USERPROFILE ?? defaultHome();
+
+  if (home) {
+    env.HOME ??= home;
+    env.USERPROFILE ??= home;
+    env.CODEX_HOME ??= path.join(home, ".codex");
+  }
+
+  const codexAuth = readCodexAuthJson(env);
+  env.OPENAI_API_KEY ??= codexAuth.OPENAI_API_KEY;
+  env.CODEX_API_KEY ??= codexAuth.CODEX_API_KEY ?? codexAuth.OPENAI_API_KEY;
+
+  return env;
+}
+
+function authMethodType(method: AuthMethod): string {
+  return "type" in method && method.type ? method.type : "agent";
+}
+
+function isEnvAuthMethod(
+  method: AuthMethod,
+): method is AuthMethodEnvVar & { type: "env_var" } {
+  return "type" in method && method.type === "env_var";
+}
+
+function selectAuthMethod(
+  methods: AuthMethod[] | undefined,
+  env: NodeJS.ProcessEnv,
+): AuthMethod | undefined {
+  if (!methods?.length) {
+    return undefined;
+  }
+
+  const readyEnvMethod = methods.find((method) => {
+    if (!isEnvAuthMethod(method)) {
+      return false;
+    }
+
+    return method.vars.every((variable) => {
+      if (variable.optional) {
+        return true;
+      }
+      return Boolean(env[variable.name]);
+    });
+  });
+  if (readyEnvMethod) {
+    return readyEnvMethod;
+  }
+
+  return (
+    methods.find((method) => authMethodType(method) === "agent") ??
+    readyEnvMethod
+  );
 }
 
 export class AcpConnection {
@@ -45,9 +144,10 @@ export class AcpConnection {
       return this.connection;
     }
 
+    const env = buildAcpEnv(this.config);
     const proc = spawn(this.config.acpCommand, this.config.acpArgs, {
       cwd: this.config.workspace,
-      env: buildChildEnv(this.config),
+      env,
       shell: process.platform === "win32",
       stdio: ["pipe", "pipe", "inherit"],
     });
@@ -109,7 +209,7 @@ export class AcpConnection {
       },
     }), stream);
 
-    await Promise.race([
+    const initializeResponse = await Promise.race([
       conn.initialize({
         protocolVersion: PROTOCOL_VERSION,
         clientInfo: {
@@ -120,6 +220,17 @@ export class AcpConnection {
       }),
       subprocessError,
     ]);
+
+    const authMethod = selectAuthMethod(initializeResponse.authMethods, env);
+    if (authMethod) {
+      await Promise.race([
+        conn.authenticate({ methodId: authMethod.id }),
+        subprocessError,
+      ]);
+      console.log(
+        `[codex:acp] authenticated with ${authMethod.name} (${authMethod.id})`,
+      );
+    }
 
     this.connection = conn;
     this.ready = true;
