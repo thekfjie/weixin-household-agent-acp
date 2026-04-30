@@ -211,6 +211,8 @@ bash /opt/weixin-household-agent-acp/infra/scripts/linux/uninstall.sh --yes --ke
 - 文件发送链路骨架
 - 服务器本地 CLI 文件发送
 - admin 微信 `/file` 发送白名单目录文件
+- admin 微信 `/files` 查看白名单目录文件
+- admin 微信 `/accounts` 查看账号角色和状态
 - family 输出过滤
 - 北京时间上下文注入
 - Codex CLI 非交互回复链路
@@ -376,6 +378,8 @@ admin 微信命令：
 ```text
 /file /tmp/test.txt 测试文件
 /file /var/lib/weixin-household-agent-acp/outbox/report.pdf
+/files
+/accounts
 ```
 
 微信里的 `/file` 只允许发送 `FILE_SEND_ALLOWED_DIRS` 里的文件，默认 Linux 安装为：

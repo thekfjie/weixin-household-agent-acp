@@ -38,6 +38,7 @@ function buildCommandReply(params: {
   database: AppDatabase;
   role: UserRole;
   account: WechatAccountRecord;
+  config: AppConfig;
 }): string {
   switch (params.command.name) {
     case "/time":
@@ -52,6 +53,8 @@ function buildCommandReply(params: {
             "/summary 查看当前摘要",
             "/new 或 /reset 重置当前对话上下文",
             "/file <文件路径> [说明] 发送允许目录里的服务器文件",
+            "/files 查看最近可发送文件",
+            "/accounts 查看已绑定微信账号",
           ].join("\n")
         : [
             "可用命令：",
@@ -65,6 +68,10 @@ function buildCommandReply(params: {
         `账号：${params.account.id}`,
         `会话：${params.session.id}`,
       ].join("\n");
+    case "/accounts":
+      return buildAccountsReply(params);
+    case "/files":
+      return buildFilesReply(params);
     case "/summary":
       return params.session.summaryText.trim()
         ? `当前摘要：${params.session.summaryText}`
@@ -99,6 +106,82 @@ function buildCommandReply(params: {
     default:
       return "暂不支持这个内建命令。";
   }
+}
+
+function buildAccountsReply(params: {
+  database: AppDatabase;
+  role: UserRole;
+}): string {
+  if (params.role !== "admin") {
+    return "这个账号命令只对 admin 开放。";
+  }
+
+  const accounts = params.database.listAccounts();
+  if (accounts.length === 0) {
+    return "当前还没有绑定微信账号。";
+  }
+
+  return [
+    "已绑定微信账号：",
+    ...accounts.map((account) =>
+      [
+        account.id,
+        `role=${account.role}`,
+        `status=${account.status}`,
+        `updated=${account.updatedAt}`,
+      ].join("  "),
+    ),
+  ].join("\n");
+}
+
+function buildFilesReply(params: {
+  config: AppConfig;
+  role: UserRole;
+}): string {
+  if (params.role !== "admin") {
+    return "这个文件命令只对 admin 开放。";
+  }
+
+  const files: Array<{ filePath: string; size: number; mtimeMs: number }> = [];
+  for (const directory of params.config.fileSend.allowedDirs) {
+    if (!fs.existsSync(directory)) {
+      continue;
+    }
+
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      if (!entry.isFile()) {
+        continue;
+      }
+
+      const filePath = path.join(directory, entry.name);
+      const stat = fs.statSync(filePath);
+      if (stat.size > params.config.fileSend.maxBytes) {
+        continue;
+      }
+
+      files.push({
+        filePath,
+        size: stat.size,
+        mtimeMs: stat.mtimeMs,
+      });
+    }
+  }
+
+  files.sort((left, right) => right.mtimeMs - left.mtimeMs);
+  const recent = files.slice(0, 10);
+  if (recent.length === 0) {
+    return [
+      "白名单目录里暂时没有可发送文件。",
+      `允许目录：${params.config.fileSend.allowedDirs.join(", ")}`,
+    ].join("\n");
+  }
+
+  return [
+    "最近可发送文件：",
+    ...recent.map(
+      (file) => `${file.filePath}  ${formatBytes(file.size)}`,
+    ),
+  ].join("\n");
 }
 
 function formatBytes(value: number): string {
@@ -482,6 +565,7 @@ export class WechatWorker {
                 database: this.options.database,
                 role: route.role,
                 account,
+                config: this.options.config,
               });
       } catch (error) {
         console.error("[worker] command failed", error);

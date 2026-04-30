@@ -10,6 +10,8 @@ const COMMANDS: readonly BuiltInCommand[] = [
   "/whoami",
   "/file",
   "/sendfile",
+  "/files",
+  "/accounts",
 ];
 
 function splitCommandArgs(raw: string): string[] {

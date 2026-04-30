@@ -7,7 +7,9 @@ export type BuiltInCommand =
   | "/help"
   | "/whoami"
   | "/file"
-  | "/sendfile";
+  | "/sendfile"
+  | "/files"
+  | "/accounts";
 
 export interface ParsedCommand {
   name: BuiltInCommand;
