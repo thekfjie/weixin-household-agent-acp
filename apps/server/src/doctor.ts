@@ -3,7 +3,7 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { loadConfig } from "./config/index.js";
-import { hasAcpEnvAuth } from "./codex/acp-connection.js";
+import { AcpConnection, hasAcpEnvAuth } from "./codex/acp-connection.js";
 import { AppDatabase } from "./storage/index.js";
 import { CodexRuntimeConfig } from "./config/types.js";
 
@@ -19,6 +19,24 @@ function ok(name: string, detail: string): CheckResult {
 
 function fail(name: string, detail: string): CheckResult {
   return { name, ok: false, detail };
+}
+
+function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string,
+): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  return Promise.race([
+    promise,
+    new Promise<T>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+    }),
+  ]).finally(() => {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  });
 }
 
 function parseNodeMajor(version: string): number {
@@ -116,6 +134,38 @@ function checkAcpAuth(name: string, config: CodexRuntimeConfig): CheckResult {
       );
 }
 
+async function checkAcpSession(
+  name: string,
+  config: CodexRuntimeConfig,
+): Promise<CheckResult> {
+  if (config.backend !== "acp") {
+    return ok(name, "not enabled");
+  }
+
+  fs.mkdirSync(config.workspace, { recursive: true });
+  const connection = new AcpConnection(config, () => undefined);
+  try {
+    const conn = await withTimeout(
+      connection.ensureReady(),
+      Math.min(config.timeoutMs, 60_000),
+      "ACP initialize timed out",
+    );
+    const response = await withTimeout(
+      conn.newSession({
+        cwd: config.workspace,
+        mcpServers: [],
+      }),
+      Math.min(config.timeoutMs, 60_000),
+      "ACP newSession timed out",
+    );
+    return ok(name, `session=${response.sessionId}`);
+  } catch (error) {
+    return fail(name, error instanceof Error ? error.message : String(error));
+  } finally {
+    connection.dispose();
+  }
+}
+
 function checkHttpHealth(port: number): Promise<CheckResult> {
   return new Promise((resolve) => {
     const request = http.get(
@@ -169,6 +219,7 @@ function checkWritableDirectories(
 async function run(): Promise<void> {
   const outputJson = process.argv.includes("--json");
   const runCodex = process.argv.includes("--codex");
+  const runAcpSession = process.argv.includes("--acp-session");
   const results: CheckResult[] = [checkNode()];
   const config = loadConfig();
 
@@ -237,6 +288,11 @@ async function run(): Promise<void> {
   if (config.codex.admin.backend === "acp") {
     results.push(await checkAcpCommand(config.codex.admin.acpCommand));
     results.push(checkAcpAuth("Codex ACP auth admin", config.codex.admin));
+    if (runAcpSession) {
+      results.push(
+        await checkAcpSession("Codex ACP session admin", config.codex.admin),
+      );
+    }
   }
   if (
     config.codex.family.backend === "acp" &&
@@ -246,6 +302,11 @@ async function run(): Promise<void> {
   }
   if (config.codex.family.backend === "acp") {
     results.push(checkAcpAuth("Codex ACP auth family", config.codex.family));
+    if (runAcpSession) {
+      results.push(
+        await checkAcpSession("Codex ACP session family", config.codex.family),
+      );
+    }
   }
 
   if (runCodex) {

@@ -310,7 +310,20 @@ CODEX_CLI_API_KEY=sk-你的key
 cd /opt/weixin-household-agent-acp
 codex exec --skip-git-repo-check "你好"
 node dist/apps/server/doctor.js
+node dist/apps/server/doctor.js --acp-session
 ```
+
+`doctor.js` 默认只检查配置和命令是否可调用；`--acp-session` 会真的启动 `codex-acp` 并执行一次 `newSession`。判断 ACP 是否可用时，以 `--acp-session` 为准，不要只看 `codex login status` 或 `codex exec`。
+
+如果另一套服务能用 ACP，而本项目不能用，优先对比两边的 systemd 运行用户和 `~/.codex`：
+
+```bash
+systemctl cat weixin-household-agent-acp
+sudo -u ubuntu -H ls -la ~/.codex
+sudo -u ubuntu -H node dist/apps/server/doctor.js --acp-session
+```
+
+要复用官方登录态，最干净的做法是让本项目服务运行在已经能通过 `codex-acp newSession` 的同一个 Linux 用户下；否则就在当前服务用户下重新完成能写出 `~/.codex/auth.json` 的登录，或者改用 `CODEX_ADMIN_ACP_AUTH_MODE=env` 加 API key。
 
 不要把命令包在反引号里。Bash 中 `` `codex exec "你好"` `` 表示“先执行 Codex，再把 Codex 的输出当成下一条命令执行”，所以会看到类似 `你好。有什么需要我处理的？: command not found` 的误报。
 
