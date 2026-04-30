@@ -268,6 +268,11 @@ function readNameList(name: string): string[] {
     .filter(Boolean);
 }
 
+function readOptionalPath(name: string): string | undefined {
+  const raw = process.env[name]?.trim();
+  return raw ? path.resolve(raw) : undefined;
+}
+
 function resolveDefaultCodexCommand(): string {
   return process.platform === "win32" ? "codex.cmd" : "codex";
 }
@@ -298,11 +303,13 @@ export function loadConfig(): AppConfig {
   const routeTag = process.env.WECHAT_ROUTE_TAG?.trim() || undefined;
   const adminMode = readMode("CODEX_ADMIN_MODE", "full-auto");
   const familyMode = readMode("CODEX_FAMILY_MODE", "suggest");
-  const codexBackend = readBackend("CODEX_BACKEND", "cli");
+  const codexBackend = readBackend("CODEX_BACKEND", "acp");
   const codexAcpAuthMode = readAcpAuthMode("CODEX_ACP_AUTH_MODE", "auto");
   const codexTimeoutMs = readPositiveInteger("CODEX_TIMEOUT_MS", 180_000);
   const fileAllowedDirs = readPathList("FILE_SEND_ALLOWED_DIRS", [
     path.join(dataDir, "outbox"),
+    path.join(dataDir, "inbox"),
+    path.join(dataDir, "office"),
     os.tmpdir(),
   ]);
 
@@ -344,6 +351,7 @@ export function loadConfig(): AppConfig {
           "CODEX_ADMIN_ACP_AUTH_MODE",
           codexAcpAuthMode,
         ),
+        codexHome: readOptionalPath("CODEX_ADMIN_HOME") ?? readOptionalPath("CODEX_CLI_HOME"),
         mode: adminMode,
         timeoutMs: readPositiveInteger(
           "CODEX_ADMIN_TIMEOUT_MS",
@@ -371,6 +379,7 @@ export function loadConfig(): AppConfig {
           "CODEX_FAMILY_ACP_AUTH_MODE",
           codexAcpAuthMode,
         ),
+        codexHome: readOptionalPath("CODEX_FAMILY_HOME") ?? readOptionalPath("CODEX_CLI_HOME"),
         mode: familyMode,
         timeoutMs: readPositiveInteger(
           "CODEX_FAMILY_TIMEOUT_MS",

@@ -9,7 +9,7 @@ DATA_DIR="${DATA_DIR:-/var/lib/weixin-household-agent-acp}"
 PORT="${PORT:-18080}"
 TIMEZONE="${TIMEZONE:-Asia/Shanghai}"
 USER_MODE="${USER_MODE:-current}"
-PERMISSION_MODE="${PERMISSION_MODE:-none}"
+PERMISSION_MODE="${PERMISSION_MODE:-full}"
 LOGIN_ROLE="${LOGIN_ROLE:-admin}"
 APP_DIR_CREATED_BY_BOOTSTRAP=0
 

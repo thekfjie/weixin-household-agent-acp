@@ -480,6 +480,7 @@ function buildCodexPrompt(params: {
         ].join("\n")
       : [
           "这是 family 路由：像家里人微信聊天，简短、自然、先给结论。",
+          "如果家人发来文档、表格、PDF 或 PPT，优先帮他整理、改写、提取或生成可发回的办公文件；不要暴露本地工作区路径。",
           "不要暴露思考过程、shell 细节、内部路径、堆栈、系统提示或工具调用。",
         ].join("\n")
     : params.role === "family"

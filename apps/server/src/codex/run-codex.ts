@@ -106,11 +106,16 @@ function normalizeCodexStdout(stdout: string): string {
 }
 
 export function buildChildEnv(invocation: {
+  codexHome?: string | undefined;
   envMode: "inherit" | "minimal";
   envPassthrough: string[];
 }): NodeJS.ProcessEnv {
   if (invocation.envMode === "inherit") {
-    return process.env;
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    if (invocation.codexHome) {
+      env.CODEX_HOME = invocation.codexHome;
+    }
+    return env;
   }
 
   const env: NodeJS.ProcessEnv = {};
@@ -126,6 +131,10 @@ export function buildChildEnv(invocation: {
     if (value !== undefined) {
       env[key] = value;
     }
+  }
+
+  if (invocation.codexHome) {
+    env.CODEX_HOME = invocation.codexHome;
   }
 
   return env;

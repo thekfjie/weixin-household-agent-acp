@@ -15,6 +15,13 @@ import { CodexRuntimeConfig } from "../config/types.js";
 import { buildChildEnv } from "./run-codex.js";
 import { AcpResponseCollector } from "./acp-response-collector.js";
 
+const ACP_AUTH_ENV_KEYS = [
+  "CODEX_CLI_HOME",
+  "CODEX_CLI_API_KEY",
+  "OPENAI_API_KEY",
+  "CODEX_API_KEY",
+] as const;
+
 function describeToolCall(update: {
   title?: string | null;
   kind?: string | null;
@@ -62,6 +69,16 @@ function readCodexAuthJson(env: NodeJS.ProcessEnv): Record<string, string> {
 
 export function buildAcpEnv(config: CodexRuntimeConfig): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...buildChildEnv(config) };
+  for (const key of ACP_AUTH_ENV_KEYS) {
+    env[key] ??= process.env[key];
+  }
+
+  const configuredCodexHome =
+    config.codexHome ?? env.CODEX_HOME ?? env.CODEX_CLI_HOME;
+  if (configuredCodexHome) {
+    env.CODEX_HOME = path.resolve(configuredCodexHome);
+  }
+
   const home = env.HOME ?? env.USERPROFILE ?? defaultHome();
 
   if (home) {

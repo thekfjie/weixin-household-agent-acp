@@ -26,7 +26,7 @@ TIMEZONE="${DEFAULT_TIMEZONE}"
 USER_MODE="current"
 SERVICE_USER="weixin-agent"
 SERVICE_GROUP="weixin-agent"
-PERMISSION_MODE="none"
+PERMISSION_MODE="full"
 ADMIN_COMMAND=""
 FAMILY_COMMAND=""
 LOGIN_ROLE="admin"
@@ -71,7 +71,7 @@ usage() {
       --timezone TZ                 业务时区，默认 ${DEFAULT_TIMEZONE}
       --user-mode current|dedicated 服务用户模式，默认 current
       --service-user USER           dedicated 模式下的服务用户名
-      --permission-mode MODE        none|limited|full sudo 策略，默认 none
+      --permission-mode MODE        none|limited|full sudo 策略，默认 full
       --admin-command CMD           admin Codex 命令
       --family-command CMD          family Codex 命令
       --login-role admin|family     首次扫码绑定角色，默认 admin
@@ -378,12 +378,12 @@ configure_interactively() {
     echo "  2) limited - 仅允许 systemctl/journalctl/docker/apt"
     echo "  3) full    - NOPASSWD 全 sudo，仅建议你自己的 admin 环境"
     local choice
-    read -r -p "请选择 sudo 策略 [1]: " choice
-    case "${choice:-1}" in
+    read -r -p "请选择 sudo 策略 [3]: " choice
+    case "${choice:-3}" in
       1) PERMISSION_MODE="none" ;;
       2) PERMISSION_MODE="limited" ;;
       3) PERMISSION_MODE="full" ;;
-      *) PERMISSION_MODE="none" ;;
+      *) PERMISSION_MODE="full" ;;
     esac
   fi
 
@@ -460,9 +460,11 @@ WECHAT_REPLY_CHUNK_CHARS=1800
 
 CODEX_ADMIN_COMMAND=${ADMIN_COMMAND}
 CODEX_ADMIN_ARGS=exec --skip-git-repo-check
-CODEX_ADMIN_BACKEND=cli
+CODEX_ADMIN_BACKEND=acp
 CODEX_ADMIN_ACP_COMMAND=
 CODEX_ADMIN_ACP_ARGS=
+CODEX_ADMIN_ACP_AUTH_MODE=auto
+CODEX_ADMIN_HOME=
 CODEX_ADMIN_MODE=full-auto
 CODEX_ADMIN_WORKSPACE=${admin_workspace}
 CODEX_ADMIN_ENV_MODE=inherit
@@ -470,9 +472,11 @@ CODEX_ADMIN_ENV_PASSTHROUGH=
 
 CODEX_FAMILY_COMMAND=${FAMILY_COMMAND}
 CODEX_FAMILY_ARGS=exec --skip-git-repo-check
-CODEX_FAMILY_BACKEND=cli
+CODEX_FAMILY_BACKEND=acp
 CODEX_FAMILY_ACP_COMMAND=
 CODEX_FAMILY_ACP_ARGS=
+CODEX_FAMILY_ACP_AUTH_MODE=auto
+CODEX_FAMILY_HOME=
 CODEX_FAMILY_MODE=suggest
 CODEX_FAMILY_WORKSPACE=${family_workspace}
 CODEX_FAMILY_ENV_MODE=minimal
@@ -504,7 +508,7 @@ FAMILY_STRIP_REASONING=true
 FAMILY_STRIP_COMMANDS=true
 FAMILY_STRIP_PATHS=true
 ALLOW_FILE_SEND=true
-FILE_SEND_ALLOWED_DIRS=${DATA_DIR}/outbox:/tmp
+FILE_SEND_ALLOWED_DIRS=${DATA_DIR}/outbox:${DATA_DIR}/inbox:${DATA_DIR}/office:/tmp
 FILE_SEND_MAX_BYTES=52428800
 EOF
 }
@@ -560,7 +564,7 @@ EOF
 }
 
 sync_app_dir() {
-  sudo mkdir -p "${APP_DIR}" "${DATA_DIR}" "${DATA_DIR}/runtime/admin" "${DATA_DIR}/runtime/family"
+  sudo mkdir -p "${APP_DIR}" "${DATA_DIR}" "${DATA_DIR}/runtime/admin" "${DATA_DIR}/runtime/family" "${DATA_DIR}/inbox" "${DATA_DIR}/outbox" "${DATA_DIR}/office"
   sudo rm -f "${LEGACY_TMP_ENV}" "${LEGACY_TMP_SERVICE}"
   sudo rm -f "/tmp/${SERVICE_NAME}.env."* "/tmp/${SERVICE_NAME}.service."* 2>/dev/null || true
 
@@ -617,18 +621,22 @@ run_node_as_service_user() {
     "WECHAT_REPLY_CHUNK_CHARS=1800"
     "CODEX_ADMIN_COMMAND=${ADMIN_COMMAND}"
     "CODEX_ADMIN_ARGS=exec --skip-git-repo-check"
-    "CODEX_ADMIN_BACKEND=cli"
+    "CODEX_ADMIN_BACKEND=acp"
     "CODEX_ADMIN_ACP_COMMAND="
     "CODEX_ADMIN_ACP_ARGS="
+    "CODEX_ADMIN_ACP_AUTH_MODE=auto"
+    "CODEX_ADMIN_HOME="
     "CODEX_ADMIN_MODE=full-auto"
     "CODEX_ADMIN_WORKSPACE=${DATA_DIR}/runtime/admin"
     "CODEX_ADMIN_ENV_MODE=inherit"
     "CODEX_ADMIN_ENV_PASSTHROUGH="
     "CODEX_FAMILY_COMMAND=${FAMILY_COMMAND}"
     "CODEX_FAMILY_ARGS=exec --skip-git-repo-check"
-    "CODEX_FAMILY_BACKEND=cli"
+    "CODEX_FAMILY_BACKEND=acp"
     "CODEX_FAMILY_ACP_COMMAND="
     "CODEX_FAMILY_ACP_ARGS="
+    "CODEX_FAMILY_ACP_AUTH_MODE=auto"
+    "CODEX_FAMILY_HOME="
     "CODEX_FAMILY_MODE=suggest"
     "CODEX_FAMILY_WORKSPACE=${DATA_DIR}/runtime/family"
     "CODEX_FAMILY_ENV_MODE=minimal"
@@ -656,7 +664,7 @@ run_node_as_service_user() {
     "FAMILY_STRIP_COMMANDS=true"
     "FAMILY_STRIP_PATHS=true"
     "ALLOW_FILE_SEND=true"
-    "FILE_SEND_ALLOWED_DIRS=${DATA_DIR}/outbox:/tmp"
+    "FILE_SEND_ALLOWED_DIRS=${DATA_DIR}/outbox:${DATA_DIR}/inbox:${DATA_DIR}/office:/tmp"
     "FILE_SEND_MAX_BYTES=52428800"
   )
 

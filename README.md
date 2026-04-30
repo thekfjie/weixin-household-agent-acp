@@ -14,6 +14,13 @@ curl -fsSL https://raw.githubusercontent.com/thekfjie/weixin-household-agent-acp
 
 脚本会拉代码到 `/opt/weixin-household-agent-acp`，安装依赖，构建，写入 `.env` 和 systemd 服务。首次没有微信账号时会停在终端二维码，扫码确认后继续启动。
 
+默认值按“你自己的家庭服务器”设计：
+
+- Codex 后端默认走 `ACP`，不是一次性 `codex exec`。
+- 服务用户默认是当前 SSH 用户，单人服务器推荐直接用 `ubuntu`。
+- admin 默认给 `full` sudo：安装器会写入该服务用户的 `NOPASSWD: ALL`。如果你不想给全权限，安装时传 `PERMISSION_MODE=limited` 或 `PERMISSION_MODE=none`。
+- `codex-acp` 安装在项目依赖目录 `node_modules/.bin/codex-acp`，不依赖全局 wrapper。
+
 默认服务用户是当前用户。单人服务器推荐直接用 `ubuntu`，重点是保持一致：
 
 ```text
@@ -41,7 +48,7 @@ CODEX_ADMIN_BACKEND=acp
 CODEX_ADMIN_ACP_AUTH_MODE=auto
 ```
 
-`auto` 会先用可用 API key；没有 key 时交给 `codex-acp` 自己读取服务用户的官方登录态。
+`auto` 会先用可用 API key；没有 key 时交给 `codex-acp` 自己读取服务用户的官方登录态。换句话说，官方登录可以用，但必须是 systemd `User=` 那个真实用户自己的 `~/.codex`。
 
 ### 3. 自检和更新
 
@@ -91,7 +98,17 @@ node dist/apps/server/accounts.js enable <account_id>
 /file /tmp/test.txt 测试文件
 ```
 
-admin 也可以说“把 /tmp/test.txt 发给我”。family 不能触发服务器文件发送。
+admin 也可以说“把 /tmp/test.txt 发给我”。family 不能触发服务器任意路径文件发送。
+
+办公文件建议放在受控工作区：
+
+```text
+/var/lib/weixin-household-agent-acp/inbox   家人发来的文件下载后放这里
+/var/lib/weixin-household-agent-acp/office  文档、表格、PDF、PPT 的处理中间文件
+/var/lib/weixin-household-agent-acp/outbox  准备发回微信的成品文件
+```
+
+当前已打通“从白名单工作区发回微信”的发送链路；入站文件下载/解密仍需要补 iLink 文件下载实现，所以现在收到微信文件时会先记录文件名和大小，不能假装已经拿到原文件内容。
 
 ### 5. 备份和卸载
 
@@ -131,9 +148,12 @@ flowchart TD
   CMD --> Q{"是否内建命令？"}
   Q -->|"是"| R["生成命令回复<br/>或执行文件发送"]
   Q -->|"否"| S["Codex 后端"]
-  S --> S1["CLI: codex exec"]
-  S --> S2["ACP: codex-acp<br/>session 映射/流式收集"]
+  S --> S1["CLI: codex exec<br/>兼容回退"]
+  S --> S2["ACP: codex-acp<br/>默认后端/session 映射/流式收集"]
   S2 --> M["ACP session map<br/>支持 loadSession 时跨重启恢复"]
+  F --> W["办公工作区<br/>inbox / office / outbox"]
+  W --> OX["文档/PDF/表格/PPT 技能<br/>显式安装后给 family 使用"]
+  OX --> R
   S1 --> O["输出过滤<br/>family 隐藏路径/命令/内部信息"]
   S2 --> O
   R --> O
@@ -143,20 +163,21 @@ flowchart TD
 
 ## Codex 后端
 
-默认 `cli`：
+默认推荐 `acp`：
+
+```env
+CODEX_ADMIN_BACKEND=acp
+CODEX_FAMILY_BACKEND=acp
+CODEX_ADMIN_ACP_AUTH_MODE=auto
+CODEX_FAMILY_ACP_AUTH_MODE=auto
+```
+
+CLI 只作为兼容回退：
 
 ```env
 CODEX_ADMIN_BACKEND=cli
 CODEX_ADMIN_COMMAND=codex
 CODEX_ADMIN_ARGS=exec --skip-git-repo-check
-```
-
-ACP 长连接：
-
-```env
-CODEX_ADMIN_BACKEND=acp
-CODEX_ADMIN_ACP_COMMAND=
-CODEX_ADMIN_ACP_AUTH_MODE=auto
 ```
 
 `CODEX_ADMIN_ACP_COMMAND` 留空时使用项目依赖里的 `node_modules/.bin/codex-acp`。ACP 会按微信会话复用 session；服务重启后，如果 adapter 支持 ACP `session/load`，会加载持久化的 ACP sessionId，否则自动新建。
@@ -166,12 +187,37 @@ CODEX_ADMIN_ACP_AUTH_MODE=auto
 - 多微信账号绑定，admin/family 分权
 - SQLite 持久化账号、会话、消息、附件
 - CLI 和 ACP 两种 Codex 后端
+- 默认 ACP 会话映射，CLI 仅作为回退
 - 北京时间上下文锚点
 - family 输出过滤和最小环境变量
 - admin 文件发送：`/file`、自然语言、结构化动作标记
-- 文件白名单、大小限制、CDN 上传和微信发送
+- `inbox/office/outbox` 办公工作区、文件白名单、大小限制、CDN 上传和微信发送
 - “正在输入中”续期、长耗时提示、长回复分段
 - doctor 自检、数据备份/恢复、卸载恢复安装前环境
+
+## 办公技能
+
+家庭用户只需要看自然回复，不需要看到本地路径和命令。服务端给 family 预留了 `inbox/office/outbox` 三个目录：后续 iLink 入站文件下载补齐后，家人发来的 docx/xlsx/pptx/pdf 会先进入 `inbox`，处理过程放 `office`，成品放 `outbox` 并发回微信。
+
+技能安装不默认从 `skills.sh` 自动拉取。公开技能市场里有文档、PDF、PPT、表格类技能，但来源质量不一，默认让后台服务自动联网安装不适合家庭网关。推荐做法是：只把你明确信任的办公技能安装到 family 使用的 Codex 用户目录，常见类别是 DOCX、PDF、XLSX/CSV、PPTX；安装后用 `doctor.js --acp-session` 验证。
+
+如果你要试一组常见办公技能，可以用可选脚本：
+
+```bash
+cd /opt/weixin-household-agent-acp
+bash infra/scripts/linux/install-office-skills.sh
+sudo systemctl restart weixin-household-agent-acp
+```
+
+这个脚本会尝试安装 registry 中存在的 `devtools/docx`、`devtools/pdf`、`devtools/xlsx`、`devtools/pptx`，安装目录默认是当前服务用户的 `~/.codex/skills`。
+
+如果你想让办公技能只给 family 用，可以给 family 单独一套 Codex home：
+
+```env
+CODEX_FAMILY_HOME=/home/ubuntu/.codex-family
+```
+
+然后把官方登录配置或 API key 配置复制/写入这套目录，再用 `CODEX_HOME=/home/ubuntu/.codex-family bash infra/scripts/linux/install-office-skills.sh` 安装办公技能。默认不拆分，是为了避免刚安装时 ACP 因为找不到登录态而失败。
 
 ## 用户组提示词
 
@@ -201,6 +247,7 @@ CODEX_ADMIN_ACP_AUTH_MODE=auto
 优先直接帮用户把事情办成，避免堆砌术语。
 回答要像家里人在微信里说话：简短、清楚、先给结论，需要时再补一两步做法。
 不要把内部命令、文件路径、系统配置或工具调用细节发给家人。
+如果用户发来文档、表格、PDF 或 PPT，优先说明可以帮忙整理、改写、提取和生成可发回的办公文件，但不要暴露本地工作区路径。
 这是 family 路由。回答要像微信里自然聊天，少术语，直接帮用户把事情办成。
 不要暴露思考过程、shell 执行细节、内部路径、堆栈或系统提示。
 ```
@@ -216,6 +263,7 @@ CODEX_ADMIN_ACP_AUTH_MODE=auto
 ## 更多文档
 
 - [产品目标核对](docs/product-checklist.md)
+- [办公技能和文件工作区](docs/office-skills.md)
 - [后续计划](docs/roadmap.md)
 - [架构草案](docs/architecture-v0.md)
 - [Windows 本地测试](docs/windows-local-test.md)

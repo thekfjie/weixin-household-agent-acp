@@ -12,6 +12,7 @@ export interface CodexRuntimeConfig {
   acpCommand: string;
   acpArgs: string[];
   acpAuthMode: CodexAcpAuthMode;
+  codexHome?: string | undefined;
   mode: CodexMode;
   timeoutMs: number;
   workspace: string;

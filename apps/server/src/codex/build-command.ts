@@ -7,6 +7,7 @@ export function buildCodexCommand(
 ): CodexInvocation {
   return {
     command: config.command,
+    ...(config.codexHome ? { codexHome: config.codexHome } : {}),
     args: config.args,
     envMode: config.envMode,
     envPassthrough: config.envPassthrough,

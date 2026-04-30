@@ -11,7 +11,7 @@
 ## P1 安装体验
 
 - 已做：一键安装后自动运行 `doctor.js`。
-- 已做：README 明确说明 Codex CLI 不由安装器自动安装，建议安装在服务用户自己的用户目录里。
+- 已做：README 明确说明 `codex-acp` 使用项目依赖目录；Codex 登录态必须在服务用户自己的 `~/.codex`。
 - 已做：README 明确说明不要用跨用户 wrapper 混淆 CLI/ACP 登录态。
 - 后续可选：安装器增加交互式提示，检测 `codex` 是否疑似 sudo 到别的用户。
 
@@ -37,6 +37,9 @@
 - 已做：admin 可以用自然语言触发简单文件发送，例如“把 /tmp/test.txt 发给我”。
 - 已做：family 默认不能直接触发服务器文件发送。
 - 已做：admin 链路支持 `[[send_file path="..." caption="..."]]` 结构化动作标记，让模型能触发文件发送。
+- 已做：默认创建 `inbox/office/outbox` 三个受控办公文件目录，并加入可发送目录。
+- 后续优先：补 iLink 入站文件下载/解密，把 family 发来的 docx/pdf/xlsx/pptx 保存到 `inbox`。
+- 后续优先：只允许 family 办公技能读写当前会话对应的受控文件，并把 `outbox` 成品发回原微信会话。
 - 后续可选：图片、视频、语音的专门媒体链路和缩略图处理。
 
 ## P5 低优先级体验优化
@@ -49,7 +52,7 @@
 ## P6 运维与安全
 
 - 已做：用户身份一致：systemd `User=`、`HOME`、`~/.codex` 和 `codex-acp` 看到的身份必须一致。
-- 已做：默认不授予 sudo；如需 admin 运维能力，再显式选择 limited/full。
+- 已做：一键安装默认给服务用户 full sudo，符合个人 admin 高权限目标；可用 `PERMISSION_MODE=none|limited` 明确降权。
 - 已做：用户可见错误先脱敏，避免把 key、token、Bearer 等敏感信息发回微信。
 - 已做：提供数据目录备份命令；默认不复制 `.env` 和 `~/.codex` 凭据。
 - 已做：提供数据目录恢复命令，恢复需要显式 `--yes`。
