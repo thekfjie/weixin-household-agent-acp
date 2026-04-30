@@ -42,6 +42,8 @@ export interface WechatConfig {
   cdnBaseUrl: string;
   channelVersion: string;
   routeTag?: string;
+  typingRefreshMs: number;
+  thinkingNoticeMs: number;
 }
 
 export interface AppConfig {

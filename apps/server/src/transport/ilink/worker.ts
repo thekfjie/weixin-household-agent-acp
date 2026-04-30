@@ -11,7 +11,10 @@ import {
   assertFileAllowedForWechatCommand,
   sendLocalFileToSession,
 } from "../../files/index.js";
-import { filterFamilyOutput } from "../../policy/index.js";
+import {
+  errorToRedactedMessage,
+  filterFamilyOutput,
+} from "../../policy/index.js";
 import { resolveRole } from "../../router/index.js";
 import {
   buildPromptContext,
@@ -280,8 +283,7 @@ function buildCommandErrorReply(params: {
   error: unknown;
   role: UserRole;
 }): string {
-  const message =
-    params.error instanceof Error ? params.error.message : String(params.error);
+  const message = errorToRedactedMessage(params.error);
 
   return params.role === "admin"
     ? `命令执行失败：${message}`
@@ -443,8 +445,7 @@ function buildCodexErrorReply(params: {
   error: unknown;
   role: UserRole;
 }): string {
-  const message =
-    params.error instanceof Error ? params.error.message : String(params.error);
+  const message = errorToRedactedMessage(params.error);
 
   if (params.role === "admin") {
     return [
@@ -461,11 +462,16 @@ async function withTypingIndicator<T>(params: {
   client: ILinkApiClient;
   toUserId: string;
   contextToken: string;
+  typingRefreshMs: number;
+  thinkingNoticeMs: number;
+  thinkingNoticeText: string;
   work: () => Promise<T>;
 }): Promise<T> {
   let typingTicket = "";
   let refreshing = false;
   let refreshTimer: NodeJS.Timeout | undefined;
+  let thinkingTimer: NodeJS.Timeout | undefined;
+  let thinkingNoticeSent = false;
 
   const sendTypingStatus = async (status: 1 | 2): Promise<void> => {
     if (!typingTicket) {
@@ -488,23 +494,39 @@ async function withTypingIndicator<T>(params: {
 
     if (typingTicket) {
       await sendTypingStatus(1);
-      refreshTimer = setInterval(() => {
-        if (refreshing) {
-          return;
-        }
+      if (params.typingRefreshMs > 0) {
+        refreshTimer = setInterval(() => {
+          if (refreshing) {
+            return;
+          }
 
-        refreshing = true;
-        sendTypingStatus(1)
-          .catch((error) => {
-            console.warn("[worker] failed to refresh typing indicator", error);
-          })
-          .finally(() => {
-            refreshing = false;
-          });
-      }, 7_000);
+          refreshing = true;
+          sendTypingStatus(1)
+            .catch((error) => {
+              console.warn("[worker] failed to refresh typing indicator", error);
+            })
+            .finally(() => {
+              refreshing = false;
+            });
+        }, params.typingRefreshMs);
+      }
     }
   } catch (error) {
     console.warn("[worker] failed to start typing indicator", error);
+  }
+
+  if (params.thinkingNoticeMs > 0) {
+    thinkingTimer = setTimeout(() => {
+      thinkingNoticeSent = true;
+      sendTextMessage({
+        client: params.client,
+        toUserId: params.toUserId,
+        contextToken: params.contextToken,
+        text: params.thinkingNoticeText,
+      }).catch((error) => {
+        console.warn("[worker] failed to send thinking notice", error);
+      });
+    }, params.thinkingNoticeMs);
   }
 
   try {
@@ -512,6 +534,9 @@ async function withTypingIndicator<T>(params: {
   } finally {
     if (refreshTimer) {
       clearInterval(refreshTimer);
+    }
+    if (thinkingTimer && !thinkingNoticeSent) {
+      clearTimeout(thinkingTimer);
     }
 
     if (typingTicket) {
@@ -693,6 +718,12 @@ export class WechatWorker {
           client,
           toUserId: inbound.contactId,
           contextToken: inbound.contextToken,
+          typingRefreshMs: this.options.config.wechat.typingRefreshMs,
+          thinkingNoticeMs: this.options.config.wechat.thinkingNoticeMs,
+          thinkingNoticeText:
+            route.role === "admin"
+              ? "我还在处理，稍等一下。"
+              : "我还在想，稍等我一下。",
           work: () =>
             buildCodexReply({
               backend: this.codexBackends[route.role],

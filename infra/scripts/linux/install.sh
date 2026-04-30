@@ -454,6 +454,8 @@ WECHAT_API_BASE_URL=https://ilinkai.weixin.qq.com
 WECHAT_CDN_BASE_URL=https://novac2c.cdn.weixin.qq.com/c2c
 WECHAT_CHANNEL_VERSION=weixin-household-agent-acp-0.1.0
 WECHAT_ROUTE_TAG=
+WECHAT_TYPING_REFRESH_MS=7000
+WECHAT_THINKING_NOTICE_MS=30000
 
 CODEX_ADMIN_COMMAND=${ADMIN_COMMAND}
 CODEX_ADMIN_ARGS=exec --skip-git-repo-check
@@ -609,6 +611,8 @@ run_node_as_service_user() {
     "WECHAT_API_BASE_URL=https://ilinkai.weixin.qq.com"
     "WECHAT_CDN_BASE_URL=https://novac2c.cdn.weixin.qq.com/c2c"
     "WECHAT_CHANNEL_VERSION=weixin-household-agent-acp-0.1.0"
+    "WECHAT_TYPING_REFRESH_MS=7000"
+    "WECHAT_THINKING_NOTICE_MS=30000"
     "CODEX_ADMIN_COMMAND=${ADMIN_COMMAND}"
     "CODEX_ADMIN_ARGS=exec --skip-git-repo-check"
     "CODEX_ADMIN_BACKEND=cli"

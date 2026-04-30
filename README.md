@@ -133,6 +133,16 @@ node dist/apps/server/accounts.js disable <account_id>
 node dist/apps/server/accounts.js enable <account_id>
 ```
 
+数据备份：
+
+```bash
+cd /opt/weixin-household-agent-acp
+node dist/apps/server/backup.js
+node dist/apps/server/backup.js --out /path/to/backup-dir
+```
+
+备份命令只复制 `DATA_DIR`，不会复制 `.env` 或 `~/.codex` 凭据。恢复前请先停止服务，再把备份目录里的数据放回 `DATA_DIR`。
+
 发送文件测试：
 
 ```bash
@@ -268,9 +278,11 @@ bash /opt/weixin-household-agent-acp/infra/scripts/linux/uninstall.sh --yes --ke
 - Codex CLI 非交互回复链路
 - Codex 回复期间尝试显示微信“正在输入中”
 - Codex 回复期间会定时刷新微信“正在输入中”
+- Codex 长时间未完成时会发一条短的“还在处理”提示
 - family Codex 子进程默认最小环境变量
 - OpenAI-compatible API 中转 wrapper
 - 账号管理 CLI 和 doctor 自检 CLI
+- 数据目录备份 CLI
 - 收到图片/语音/文件/视频时转成文本摘要进入对话
 
 后续计划见 [docs/roadmap.md](docs/roadmap.md)。
@@ -525,7 +537,16 @@ FILE_SEND_MAX_BYTES=52428800
 
 ## 正在输入中
 
-普通聊天消息进入 Codex 回复链路时，服务会先调用 iLink `getconfig` 获取 `typing_ticket`，再用 `sendtyping(status=1)` 显示“正在输入中”，回复结束后用 `sendtyping(status=2)` 取消。这个能力依赖微信/iLink 当次是否返回 `typing_ticket`，失败时只写服务日志，不会影响正常回复。
+普通聊天消息进入 Codex 回复链路时，服务会先调用 iLink `getconfig` 获取 `typing_ticket`，再用 `sendtyping(status=1)` 显示“正在输入中”，回复期间默认每 7 秒刷新一次，回复结束后用 `sendtyping(status=2)` 取消。这个能力依赖微信/iLink 当次是否返回 `typing_ticket`，失败时只写服务日志，不会影响正常回复。
+
+如果 Codex 超过 30 秒还没完成，服务会额外发送一条很短的“还在处理/还在想”提示，避免用户以为卡死。可以在 `.env` 调整：
+
+```env
+WECHAT_TYPING_REFRESH_MS=7000
+WECHAT_THINKING_NOTICE_MS=30000
+```
+
+设置为 `0` 可以关闭对应行为。
 
 ## 文档
 

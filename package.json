@@ -15,6 +15,7 @@
     "wechat:setup": "node dist/apps/server/setup.js",
     "accounts": "node dist/apps/server/accounts.js",
     "doctor": "node dist/apps/server/doctor.js",
+    "backup": "node dist/apps/server/backup.js",
     "codex:configure": "node dist/apps/server/configure-codex.js",
     "codex:api-wrapper": "node dist/apps/server/codex-api-wrapper.js",
     "file:send": "node dist/apps/server/send-file.js",
