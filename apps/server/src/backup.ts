@@ -19,6 +19,24 @@ function parseOutDir(dataDir: string): string {
   return path.join(dataDir, "backups", `manual-${timestamp()}`);
 }
 
+function parseRestoreDir(): string | undefined {
+  const restoreIndex = process.argv.indexOf("--restore");
+  if (restoreIndex < 0) {
+    return undefined;
+  }
+
+  const source = process.argv[restoreIndex + 1];
+  if (!source) {
+    throw new Error("--restore requires a backup directory path");
+  }
+
+  if (!process.argv.includes("--yes")) {
+    throw new Error("restore requires --yes");
+  }
+
+  return path.resolve(source);
+}
+
 function shouldSkip(source: string, backupRoot: string): boolean {
   const relative = path.relative(backupRoot, source);
   return relative === "" || (!!relative && !relative.startsWith(".."));
@@ -44,9 +62,30 @@ function copyRecursive(source: string, target: string, backupRoot: string): void
   }
 }
 
+function restoreBackup(sourceDir: string, dataDir: string): void {
+  if (!fs.existsSync(sourceDir) || !fs.statSync(sourceDir).isDirectory()) {
+    throw new Error(`Backup directory does not exist: ${sourceDir}`);
+  }
+
+  if (path.resolve(sourceDir) === path.resolve(dataDir)) {
+    throw new Error("Refusing to restore from DATA_DIR into itself");
+  }
+
+  fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+  copyRecursive(sourceDir, dataDir, path.join(sourceDir, "backups"));
+  console.log(`恢复完成：${sourceDir} -> ${dataDir}`);
+  console.log("请确认文件权限属于服务用户，然后重启 systemd 服务。");
+}
+
 function run(): void {
   const config = loadConfig();
   const dataDir = config.server.dataDir;
+  const restoreDir = parseRestoreDir();
+  if (restoreDir) {
+    restoreBackup(restoreDir, dataDir);
+    return;
+  }
+
   const backupDir = parseOutDir(dataDir);
 
   if (!fs.existsSync(dataDir)) {

@@ -279,6 +279,71 @@ function parseNaturalFileRequest(text: string): ParsedCommand | undefined {
   };
 }
 
+function parseAssistantFileAction(text: string):
+  | {
+      command: ParsedCommand;
+      cleanedText: string;
+    }
+  | undefined {
+  const match = text.match(
+    /\[\[send_file\s+path=(?:"([^"]+)"|'([^']+)'|([^\]\s]+))(?:\s+caption=(?:"([^"]*)"|'([^']*)'|([^\]]+)))?\s*\]\]/i,
+  );
+  if (!match) {
+    return undefined;
+  }
+
+  const filePath = (match[1] ?? match[2] ?? match[3] ?? "").trim();
+  const caption = (match[4] ?? match[5] ?? match[6] ?? "").trim();
+  if (!filePath) {
+    return undefined;
+  }
+
+  return {
+    command: {
+      name: "/file",
+      raw: match[0],
+      args: caption ? [filePath, caption] : [filePath],
+    },
+    cleanedText: text.replace(match[0], "").trim(),
+  };
+}
+
+function splitReplyText(text: string, maxChars: number): string[] {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return [];
+  }
+
+  if (maxChars <= 0 || trimmed.length <= maxChars) {
+    return [trimmed];
+  }
+
+  const chunks: string[] = [];
+  let remaining = trimmed;
+
+  while (remaining.length > maxChars) {
+    const window = remaining.slice(0, maxChars);
+    const cutAt = Math.max(
+      window.lastIndexOf("\n\n"),
+      window.lastIndexOf("\n"),
+      window.lastIndexOf("。"),
+      window.lastIndexOf("！"),
+      window.lastIndexOf("？"),
+      window.lastIndexOf(". "),
+      window.lastIndexOf(" "),
+    );
+    const end = cutAt > Math.floor(maxChars * 0.45) ? cutAt + 1 : maxChars;
+    chunks.push(remaining.slice(0, end).trim());
+    remaining = remaining.slice(end).trim();
+  }
+
+  if (remaining) {
+    chunks.push(remaining);
+  }
+
+  return chunks.filter(Boolean);
+}
+
 function buildCommandErrorReply(params: {
   error: unknown;
   role: UserRole;
@@ -385,6 +450,7 @@ function buildCodexPrompt(params: {
       ? [
           "这是 admin 路由。可以更直接地处理工程、运维和系统问题。",
           "如果需要给出命令，可以给出清晰命令，但仍然只输出要发回微信的内容。",
+          "如果用户明确要求发送服务器本地文件，且你知道绝对路径，可以只输出一个动作标记：[[send_file path=\"/absolute/path\" caption=\"可选说明\"]]。不要把这个标记解释给用户。",
         ].join("\n")
       : [
           "这是 family 路由。回答要像微信里自然聊天，少术语，直接帮用户把事情办成。",
@@ -456,6 +522,35 @@ function buildCodexErrorReply(params: {
   }
 
   return "我这边调用助手时出了一点问题，先稍等一下再试。";
+}
+
+async function handleAssistantFileActions(params: {
+  rawReply: string;
+  config: AppConfig;
+  client: ILinkApiClient;
+  database: AppDatabase;
+  session: SessionRecord;
+  role: UserRole;
+}): Promise<string> {
+  if (params.role !== "admin") {
+    return params.rawReply;
+  }
+
+  const action = parseAssistantFileAction(params.rawReply);
+  if (!action) {
+    return params.rawReply;
+  }
+
+  const fileReply = await handleFileCommand({
+    command: action.command,
+    config: params.config,
+    client: params.client,
+    database: params.database,
+    session: params.session,
+    role: params.role,
+  });
+
+  return [action.cleanedText, fileReply].filter(Boolean).join("\n");
 }
 
 async function withTypingIndicator<T>(params: {
@@ -733,6 +828,14 @@ export class WechatWorker {
               userText: inbound.text,
             }),
         });
+        rawReply = await handleAssistantFileActions({
+          rawReply,
+          config: this.options.config,
+          client,
+          database: this.options.database,
+          session: activeSession,
+          role: route.role,
+        });
       } catch (error) {
         console.error("[worker] codex reply failed", error);
         rawReply = buildCodexErrorReply({
@@ -751,12 +854,22 @@ export class WechatWorker {
       return;
     }
 
-    await sendTextMessage({
-      client,
-      toUserId: inbound.contactId,
-      contextToken: inbound.contextToken,
-      text: replyText,
-    });
+    let lastClientId = "";
+    const chunks = splitReplyText(
+      replyText,
+      this.options.config.wechat.replyChunkChars,
+    );
+    for (const [index, chunk] of chunks.entries()) {
+      lastClientId = await sendTextMessage({
+        client,
+        toUserId: inbound.contactId,
+        contextToken: inbound.contextToken,
+        text: chunk,
+      });
+      if (index < chunks.length - 1) {
+        await sleep(350);
+      }
+    }
 
     this.options.database.appendMessage({
       id: buildMessageId("outbound"),
@@ -765,7 +878,7 @@ export class WechatWorker {
       messageType: "text",
       textContent: replyText,
       createdAt: new Date().toISOString(),
-      sourceMessageId: inbound.sourceMessageId,
+      sourceMessageId: lastClientId || inbound.sourceMessageId,
     });
   }
 }

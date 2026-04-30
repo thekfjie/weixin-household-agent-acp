@@ -50,6 +50,40 @@ function checkNode(): CheckResult {
     : fail("Node.js", `${process.version}，需要 >= 22`);
 }
 
+function checkEnvFilePermissions(envPath: string): CheckResult {
+  if (!fs.existsSync(envPath)) {
+    return fail(".env 权限", "文件不存在");
+  }
+
+  if (process.platform === "win32") {
+    return ok(".env 权限", "windows skipped");
+  }
+
+  const mode = fs.statSync(envPath).mode & 0o777;
+  if ((mode & 0o007) !== 0) {
+    return fail(
+      ".env 权限",
+      `${mode.toString(8)}，建议不要让 other 读取：chmod o-rwx ${envPath}`,
+    );
+  }
+
+  return ok(".env 权限", mode.toString(8));
+}
+
+function checkDiskSpace(directory: string): CheckResult {
+  try {
+    fs.mkdirSync(directory, { recursive: true });
+    const stat = fs.statfsSync(directory);
+    const freeBytes = Number(stat.bavail) * Number(stat.bsize);
+    const freeMiB = Math.floor(freeBytes / 1024 / 1024);
+    return freeBytes >= 512 * 1024 * 1024
+      ? ok("磁盘空间", `${directory} free=${freeMiB}MiB`)
+      : fail("磁盘空间", `${directory} free=${freeMiB}MiB，建议至少 512MiB`);
+  } catch (error) {
+    return fail("磁盘空间", error instanceof Error ? error.message : String(error));
+  }
+}
+
 function checkCommand(command: string, args: string[]): Promise<CheckResult> {
   return new Promise((resolve) => {
     let child;
@@ -228,6 +262,7 @@ async function run(): Promise<void> {
       ? ok(".env", path.resolve(".env"))
       : fail(".env", "当前目录没有 .env，systemd 运行时通常需要它"),
   );
+  results.push(checkEnvFilePermissions(path.resolve(".env")));
 
   try {
     fs.mkdirSync(config.server.dataDir, { recursive: true });
@@ -240,6 +275,7 @@ async function run(): Promise<void> {
       ),
     );
   }
+  results.push(checkDiskSpace(config.server.dataDir));
 
   results.push(
     checkWritableDirectories("文件发送白名单目录", config.fileSend.allowedDirs),

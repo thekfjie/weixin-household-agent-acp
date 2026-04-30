@@ -44,6 +44,7 @@ export interface WechatConfig {
   routeTag?: string;
   typingRefreshMs: number;
   thinkingNoticeMs: number;
+  replyChunkChars: number;
 }
 
 export interface AppConfig {

@@ -139,9 +139,10 @@ node dist/apps/server/accounts.js enable <account_id>
 cd /opt/weixin-household-agent-acp
 node dist/apps/server/backup.js
 node dist/apps/server/backup.js --out /path/to/backup-dir
+node dist/apps/server/backup.js --restore /path/to/backup-dir --yes
 ```
 
-备份命令只复制 `DATA_DIR`，不会复制 `.env` 或 `~/.codex` 凭据。恢复前请先停止服务，再把备份目录里的数据放回 `DATA_DIR`。
+备份命令只复制 `DATA_DIR`，不会复制 `.env` 或 `~/.codex` 凭据。恢复前请先停止服务；恢复后确认文件权限属于服务用户，再重启 systemd。
 
 发送文件测试：
 
@@ -279,13 +280,16 @@ bash /opt/weixin-household-agent-acp/infra/scripts/linux/uninstall.sh --yes --ke
 - Codex 回复期间尝试显示微信“正在输入中”
 - Codex 回复期间会定时刷新微信“正在输入中”
 - Codex 长时间未完成时会发一条短的“还在处理”提示
+- 长回复会按段落拆成多条微信消息
 - family Codex 子进程默认最小环境变量
 - OpenAI-compatible API 中转 wrapper
 - 账号管理 CLI 和 doctor 自检 CLI
 - 数据目录备份 CLI
+- doctor 会检查 `.env` 权限和数据目录磁盘空间
 - 收到图片/语音/文件/视频时转成文本摘要进入对话
 
 后续计划见 [docs/roadmap.md](docs/roadmap.md)。
+最初产品想法和当前状态核对见 [docs/product-checklist.md](docs/product-checklist.md)。
 
 ## 当前接口
 
@@ -544,9 +548,14 @@ FILE_SEND_MAX_BYTES=52428800
 ```env
 WECHAT_TYPING_REFRESH_MS=7000
 WECHAT_THINKING_NOTICE_MS=30000
+WECHAT_REPLY_CHUNK_CHARS=1800
 ```
 
 设置为 `0` 可以关闭对应行为。
+
+`WECHAT_REPLY_CHUNK_CHARS` 控制长回复分段，默认 1800 字符；设为 `0` 可关闭分段。
+
+admin 链路还有一个轻量文件动作协议：如果 Codex 明确输出 `[[send_file path="/tmp/test.txt" caption="说明"]]`，服务会拦截这个标记并走文件发送接口，不会把标记原样发给微信。这个能力只对 admin 生效，并且仍受文件白名单和大小限制约束。
 
 ## 文档
 

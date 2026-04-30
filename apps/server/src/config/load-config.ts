@@ -328,6 +328,7 @@ export function loadConfig(): AppConfig {
         "WECHAT_THINKING_NOTICE_MS",
         30_000,
       ),
+      replyChunkChars: readNonNegativeInteger("WECHAT_REPLY_CHUNK_CHARS", 1800),
     },
     codex: {
       admin: {
