@@ -723,6 +723,24 @@ start_service() {
   sudo systemctl restart "${SERVICE_NAME}"
 }
 
+run_post_install_doctor() {
+  if [[ "${NO_START}" -eq 1 ]]; then
+    return
+  fi
+
+  echo ""
+  echo "运行安装后自检..."
+  sleep 2
+  pushd "${APP_DIR}" >/dev/null
+  if ! run_node_as_service_user "dist/apps/server/doctor.js"; then
+    echo ""
+    echo "自检发现问题。请查看："
+    echo "  journalctl -u ${SERVICE_NAME} -n 100 --no-pager"
+    echo "  cd ${APP_DIR} && node dist/apps/server/doctor.js --json"
+  fi
+  popd >/dev/null
+}
+
 write_install_state_file() {
   local target_file="$1"
   local tmp_file
@@ -823,6 +841,7 @@ main() {
   build_project
   run_login_if_needed
   start_service
+  run_post_install_doctor
   write_install_state
   print_summary
 }

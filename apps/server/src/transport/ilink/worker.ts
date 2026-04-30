@@ -52,6 +52,7 @@ function buildCommandReply(params: {
             "可用命令：",
             "/time 查看北京时间",
             "/whoami 查看当前账号角色",
+            "/sessions 查看最近会话",
             "/recent 查看最近几条消息",
             "/summary 查看当前摘要",
             "/new 或 /reset 重置当前对话上下文",
@@ -71,6 +72,8 @@ function buildCommandReply(params: {
         `账号：${params.account.id}`,
         `会话：${params.session.id}`,
       ].join("\n");
+    case "/sessions":
+      return buildSessionsReply(params);
     case "/accounts":
       return buildAccountsReply(params);
     case "/files":
@@ -132,6 +135,39 @@ function buildAccountsReply(params: {
         `role=${account.role}`,
         `status=${account.status}`,
         `updated=${account.updatedAt}`,
+      ].join("  "),
+    ),
+  ].join("\n");
+}
+
+function buildSessionsReply(params: {
+  database: AppDatabase;
+  role: UserRole;
+  session: SessionRecord;
+}): string {
+  if (params.role !== "admin") {
+    return [
+      "当前对话：",
+      `session=${params.session.id}`,
+      `last=${params.session.lastActiveAt}`,
+    ].join("\n");
+  }
+
+  const sessions = params.database.listRecentSessions(10);
+  if (sessions.length === 0) {
+    return "当前还没有会话。";
+  }
+
+  return [
+    "最近会话：",
+    ...sessions.map((session) =>
+      [
+        `session=${session.id}`,
+        `role=${session.role}`,
+        `account=${session.wechatAccountId}`,
+        `contact=${session.contactId}`,
+        `last=${session.lastActiveAt}`,
+        `summary=${session.summaryText.trim() ? "yes" : "no"}`,
       ].join("  "),
     ),
   ].join("\n");
@@ -202,6 +238,42 @@ function formatBytes(value: number): string {
   }
 
   return `${value} B`;
+}
+
+function extractQuotedText(text: string): string | undefined {
+  const match = text.match(/["'“”‘’]([^"'“”‘’]+)["'“”‘’]/);
+  return match?.[1]?.trim() || undefined;
+}
+
+function extractAbsolutePath(text: string): string | undefined {
+  const quoted = extractQuotedText(text);
+  if (quoted && (path.isAbsolute(quoted) || /^[A-Za-z]:[\\/]/.test(quoted))) {
+    return quoted;
+  }
+
+  const match = text.match(
+    /(?:^|\s)((?:\/[^\s"'“”‘’]+)+|[A-Za-z]:[\\/][^\s"'“”‘’]+)/,
+  );
+  return match?.[1]?.trim() || undefined;
+}
+
+function parseNaturalFileRequest(text: string): ParsedCommand | undefined {
+  const hasSendIntent = /(发|发送|传|传给|send)\s*/i.test(text);
+  if (!hasSendIntent) {
+    return undefined;
+  }
+
+  const filePath = extractAbsolutePath(text);
+  if (!filePath) {
+    return undefined;
+  }
+
+  const caption = text.replace(filePath, "").replace(/["'“”‘’]/g, "").trim();
+  return {
+    name: "/file",
+    raw: text,
+    args: caption ? [filePath, caption] : [filePath],
+  };
 }
 
 function buildCommandErrorReply(params: {
@@ -392,6 +464,20 @@ async function withTypingIndicator<T>(params: {
   work: () => Promise<T>;
 }): Promise<T> {
   let typingTicket = "";
+  let refreshing = false;
+  let refreshTimer: NodeJS.Timeout | undefined;
+
+  const sendTypingStatus = async (status: 1 | 2): Promise<void> => {
+    if (!typingTicket) {
+      return;
+    }
+
+    await params.client.sendTyping({
+      ilink_user_id: params.toUserId,
+      typing_ticket: typingTicket,
+      status,
+    });
+  };
 
   try {
     const config = await params.client.getConfig(
@@ -401,11 +487,21 @@ async function withTypingIndicator<T>(params: {
     typingTicket = config.typing_ticket?.trim() ?? "";
 
     if (typingTicket) {
-      await params.client.sendTyping({
-        ilink_user_id: params.toUserId,
-        typing_ticket: typingTicket,
-        status: 1,
-      });
+      await sendTypingStatus(1);
+      refreshTimer = setInterval(() => {
+        if (refreshing) {
+          return;
+        }
+
+        refreshing = true;
+        sendTypingStatus(1)
+          .catch((error) => {
+            console.warn("[worker] failed to refresh typing indicator", error);
+          })
+          .finally(() => {
+            refreshing = false;
+          });
+      }, 7_000);
     }
   } catch (error) {
     console.warn("[worker] failed to start typing indicator", error);
@@ -414,13 +510,13 @@ async function withTypingIndicator<T>(params: {
   try {
     return await params.work();
   } finally {
+    if (refreshTimer) {
+      clearInterval(refreshTimer);
+    }
+
     if (typingTicket) {
       try {
-        await params.client.sendTyping({
-          ilink_user_id: params.toUserId,
-          typing_ticket: typingTicket,
-          status: 2,
-        });
+        await sendTypingStatus(2);
       } catch (error) {
         console.warn("[worker] failed to stop typing indicator", error);
       }
@@ -555,7 +651,9 @@ export class WechatWorker {
       sourceMessageId: inbound.sourceMessageId,
     });
 
-    const parsedCommand = parseBuiltInCommand(inbound.text);
+    const parsedCommand =
+      parseBuiltInCommand(inbound.text) ??
+      (route.role === "admin" ? parseNaturalFileRequest(inbound.text) : undefined);
     let rawReply: string;
 
     if (parsedCommand) {

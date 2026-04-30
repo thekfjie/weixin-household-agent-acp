@@ -6,6 +6,7 @@ export type BuiltInCommand =
   | "/recent"
   | "/help"
   | "/whoami"
+  | "/sessions"
   | "/file"
   | "/sendfile"
   | "/files"

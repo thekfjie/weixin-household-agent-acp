@@ -8,6 +8,7 @@ const COMMANDS: readonly BuiltInCommand[] = [
   "/recent",
   "/help",
   "/whoami",
+  "/sessions",
   "/file",
   "/sendfile",
   "/files",
