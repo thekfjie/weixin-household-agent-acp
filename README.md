@@ -269,7 +269,22 @@ CODEX_FAMILY_ACP_ARGS=
 
 权限说明：本项目的 ACP client 默认拒绝 agent 的权限请求，不会自动批准工具调用。这样 family 链路更安全；admin 如果以后要开放更强工具权限，需要再明确配置。
 
-认证说明：ACP 后端启动 `codex-acp` 时，会补齐服务用户的 `HOME` / `CODEX_HOME`，并尝试从 `~/.codex/auth.json` 读取 `OPENAI_API_KEY` / `CODEX_API_KEY` 传给 ACP 子进程，然后按 ACP 协议调用 `authenticate`。所以切 ACP 后要用运行 systemd 的同一个用户先完成 `codex login` 或 `configure-codex.js --apply`。如果微信里出现 `Authentication required`，优先检查 `systemctl cat weixin-household-agent-acp` 里的 `User=`，再用这个用户执行：
+认证说明：`codex-acp` 的非交互后台进程不能稳定复用 `codex exec` 的 ChatGPT 登录态。ACP 后端启动 `codex-acp` 时，会补齐服务用户的 `HOME` / `CODEX_HOME`，并按下面顺序准备非交互 key：
+
+1. `.env` 里的 `CODEX_CLI_API_KEY`
+2. `.env` 里的 `OPENAI_API_KEY` / `CODEX_API_KEY`
+3. 服务用户 `~/.codex/auth.json` 里的 `OPENAI_API_KEY` / `CODEX_API_KEY`
+
+随后它只会选择已经满足环境变量条件的 `env_var` auth method，并调用 ACP `authenticate`。如果没有可用 key，会直接报 `Set OPENAI_API_KEY or CODEX_API_KEY in the service environment for codex-acp`，不会退回到 `chatgpt` 这种需要交互登录的分支。
+
+所以启用 ACP 时，最简单的配置是在 `/opt/weixin-household-agent-acp/.env` 里填：
+
+```env
+CODEX_ADMIN_BACKEND=acp
+CODEX_CLI_API_KEY=sk-你的key
+```
+
+如果微信里出现 `Authentication required`，优先检查 `systemctl cat weixin-household-agent-acp` 里的 `User=`，再用这个用户执行：
 
 ```bash
 cd /opt/weixin-household-agent-acp
@@ -305,6 +320,8 @@ CODEX_CLI_NETWORK_ACCESS=enabled
 CODEX_CLI_CONTEXT_WINDOW=1000000
 CODEX_CLI_AUTO_COMPACT_TOKEN_LIMIT=900000
 ```
+
+如果 `CODEX_ADMIN_BACKEND=acp`，这同一个 `CODEX_CLI_API_KEY` 会自动桥接成 `codex-acp` 需要的 `OPENAI_API_KEY` / `CODEX_API_KEY`，不需要在 `.env` 重复写两遍 key。
 
 然后用运行 systemd 的同一个用户写入 Codex CLI 配置。默认安装一般就是当前用户；如果 `systemctl cat weixin-household-agent-acp` 里是 `User=ubuntu`，就直接运行：
 

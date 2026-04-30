@@ -60,7 +60,7 @@ function readCodexAuthJson(env: NodeJS.ProcessEnv): Record<string, string> {
   }
 }
 
-function buildAcpEnv(config: CodexRuntimeConfig): NodeJS.ProcessEnv {
+export function buildAcpEnv(config: CodexRuntimeConfig): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...buildChildEnv(config) };
   const home = env.HOME ?? env.USERPROFILE ?? defaultHome();
 
@@ -71,8 +71,14 @@ function buildAcpEnv(config: CodexRuntimeConfig): NodeJS.ProcessEnv {
   }
 
   const codexAuth = readCodexAuthJson(env);
-  env.OPENAI_API_KEY ??= codexAuth.OPENAI_API_KEY;
-  env.CODEX_API_KEY ??= codexAuth.CODEX_API_KEY ?? codexAuth.OPENAI_API_KEY;
+  const apiKey =
+    env.CODEX_CLI_API_KEY ??
+    env.OPENAI_API_KEY ??
+    env.CODEX_API_KEY ??
+    codexAuth.OPENAI_API_KEY ??
+    codexAuth.CODEX_API_KEY;
+  env.OPENAI_API_KEY ??= apiKey;
+  env.CODEX_API_KEY ??= apiKey;
 
   return env;
 }
@@ -87,7 +93,7 @@ function isEnvAuthMethod(
   return "type" in method && method.type === "env_var";
 }
 
-function selectAuthMethod(
+export function selectAcpAuthMethod(
   methods: AuthMethod[] | undefined,
   env: NodeJS.ProcessEnv,
 ): AuthMethod | undefined {
@@ -111,10 +117,47 @@ function selectAuthMethod(
     return readyEnvMethod;
   }
 
-  return (
-    methods.find((method) => authMethodType(method) === "agent") ??
-    readyEnvMethod
-  );
+  return undefined;
+}
+
+function describeAuthMethods(
+  methods: AuthMethod[] | undefined,
+  env: NodeJS.ProcessEnv,
+): string {
+  if (!methods?.length) {
+    return "none";
+  }
+
+  return methods
+    .map((method) => {
+      const type = authMethodType(method);
+      if (!isEnvAuthMethod(method)) {
+        return `${method.id}:${type}`;
+      }
+
+      const vars = method.vars
+        .map((variable) => `${variable.name}=${Boolean(env[variable.name])}`)
+        .join(",");
+      return `${method.id}:${type}[${vars}]`;
+    })
+    .join(" ");
+}
+
+function requiredAuthEnvVars(methods: AuthMethod[] | undefined): string[] {
+  const names = new Set<string>();
+  for (const method of methods ?? []) {
+    if (!isEnvAuthMethod(method)) {
+      continue;
+    }
+
+    for (const variable of method.vars) {
+      if (!variable.optional) {
+        names.add(variable.name);
+      }
+    }
+  }
+
+  return [...names].sort();
 }
 
 export class AcpConnection {
@@ -221,7 +264,12 @@ export class AcpConnection {
       subprocessError,
     ]);
 
-    const authMethod = selectAuthMethod(initializeResponse.authMethods, env);
+    const authMethods = initializeResponse.authMethods ?? [];
+    console.log(
+      `[codex:acp] auth methods: ${describeAuthMethods(authMethods, env)}`,
+    );
+
+    const authMethod = selectAcpAuthMethod(authMethods, env);
     if (authMethod) {
       await Promise.race([
         conn.authenticate({ methodId: authMethod.id }),
@@ -229,6 +277,11 @@ export class AcpConnection {
       ]);
       console.log(
         `[codex:acp] authenticated with ${authMethod.name} (${authMethod.id})`,
+      );
+    } else if (authMethods.length > 0) {
+      const required = requiredAuthEnvVars(authMethods).join(" or ");
+      throw new Error(
+        `Set ${required || "OPENAI_API_KEY or CODEX_API_KEY"} in the service environment for codex-acp`,
       );
     }
 

@@ -3,7 +3,9 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { loadConfig } from "./config/index.js";
+import { buildAcpEnv } from "./codex/acp-connection.js";
 import { AppDatabase } from "./storage/index.js";
+import { CodexRuntimeConfig } from "./config/types.js";
 
 interface CheckResult {
   name: string;
@@ -87,6 +89,24 @@ async function checkAcpCommand(command: string): Promise<CheckResult> {
   }
 
   return ok(command, result.detail || "ACP adapter is callable");
+}
+
+function checkAcpAuth(name: string, config: CodexRuntimeConfig): CheckResult {
+  if (config.backend !== "acp") {
+    return ok(name, "not enabled");
+  }
+
+  const env = buildAcpEnv(config);
+  const hasOpenAiKey = Boolean(env.OPENAI_API_KEY);
+  const hasCodexKey = Boolean(env.CODEX_API_KEY);
+  const detail = `OPENAI_API_KEY=${hasOpenAiKey}, CODEX_API_KEY=${hasCodexKey}`;
+
+  return hasOpenAiKey || hasCodexKey
+    ? ok(name, detail)
+    : fail(
+        name,
+        `${detail}; set CODEX_CLI_API_KEY, OPENAI_API_KEY, or CODEX_API_KEY for codex-acp`,
+      );
 }
 
 function checkHttpHealth(port: number): Promise<CheckResult> {
@@ -209,12 +229,16 @@ async function run(): Promise<void> {
   }
   if (config.codex.admin.backend === "acp") {
     results.push(await checkAcpCommand(config.codex.admin.acpCommand));
+    results.push(checkAcpAuth("Codex ACP auth admin", config.codex.admin));
   }
   if (
     config.codex.family.backend === "acp" &&
     config.codex.family.acpCommand !== config.codex.admin.acpCommand
   ) {
     results.push(await checkAcpCommand(config.codex.family.acpCommand));
+  }
+  if (config.codex.family.backend === "acp") {
+    results.push(checkAcpAuth("Codex ACP auth family", config.codex.family));
   }
 
   if (runCodex) {
