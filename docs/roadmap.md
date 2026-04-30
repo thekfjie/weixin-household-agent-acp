@@ -20,7 +20,8 @@
 - 已做：ACP 后端按微信会话复用 ACP session。
 - 已做：`/new` 和 `/reset` 会清掉当前微信会话的 ACP session 映射。
 - 已做：`/sessions` 查看最近会话。
-- 后续可选：如果 ACP adapter 提供稳定 resume 能力，再做跨服务重启恢复。
+- 已做：持久化微信会话到 ACP sessionId 的映射；如果 ACP adapter 声明 `loadSession=true`，服务重启后会尝试 `session/load` 恢复。
+- 后续可选：如果当前 codex-acp 不声明 `loadSession=true`，需要继续跟进 adapter 支持情况；不支持时只能自动新建 session。
 - 后续可选：补 `/sessions`、`/switch`，但家庭普通用户默认不需要自己切会话。
 - 后续可选：定时 sum-up，逐步演进成 skill/memory。
 

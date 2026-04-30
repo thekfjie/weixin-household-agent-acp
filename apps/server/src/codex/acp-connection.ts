@@ -172,6 +172,8 @@ export class AcpConnection {
 
   private ready = false;
 
+  private loadSessionSupported = false;
+
   private readonly collectors = new Map<string, AcpResponseCollector>();
 
   constructor(
@@ -208,6 +210,7 @@ export class AcpConnection {
     proc.once("exit", (code) => {
       console.warn(`[codex:acp] subprocess exited: ${code ?? "unknown"}`);
       this.ready = false;
+      this.loadSessionSupported = false;
       this.connection = undefined;
       this.process = undefined;
       this.collectors.clear();
@@ -270,8 +273,13 @@ export class AcpConnection {
     ]);
 
     const authMethods = initializeResponse.authMethods ?? [];
+    this.loadSessionSupported =
+      initializeResponse.agentCapabilities?.loadSession === true;
     console.log(
       `[codex:acp] auth methods: ${describeAuthMethods(authMethods, env)}`,
+    );
+    console.log(
+      `[codex:acp] loadSession=${this.loadSessionSupported}`,
     );
 
     const authMethod =
@@ -304,11 +312,16 @@ export class AcpConnection {
 
   dispose(): void {
     this.ready = false;
+    this.loadSessionSupported = false;
     this.collectors.clear();
     this.connection = undefined;
     if (this.process) {
       this.process.kill();
       this.process = undefined;
     }
+  }
+
+  supportsLoadSession(): boolean {
+    return this.loadSessionSupported;
   }
 }

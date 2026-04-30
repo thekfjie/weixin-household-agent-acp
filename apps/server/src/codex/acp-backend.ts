@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import crypto from "node:crypto";
 import type { ContentBlock, SessionId } from "@agentclientprotocol/sdk";
 import { CodexRuntimeConfig } from "../config/types.js";
@@ -25,14 +26,31 @@ function withTimeout<T>(
   });
 }
 
+interface PersistedAcpSession {
+  conversationId: string;
+  sessionId: SessionId;
+  updatedAt: string;
+}
+
+interface PersistedAcpSessionMap {
+  version: 1;
+  sessions: PersistedAcpSession[];
+}
+
 export class AcpCodexBackend implements CodexBackend {
   private readonly connection: AcpConnection;
 
   private readonly sessions = new Map<string, SessionId>();
 
+  private readonly persistedSessions = new Map<string, SessionId>();
+
   private readonly queues = new Map<string, Promise<unknown>>();
 
+  private readonly sessionMapPath: string;
+
   constructor(private readonly config: CodexRuntimeConfig) {
+    this.sessionMapPath = path.join(config.workspace, ".acp-session-map.json");
+    this.loadPersistedSessions();
     this.connection = new AcpConnection(config, () => {
       this.sessions.clear();
       this.queues.clear();
@@ -108,6 +126,33 @@ export class AcpCodexBackend implements CodexBackend {
       return existing;
     }
 
+    const persisted = this.persistedSessions.get(conversationId);
+    if (persisted && this.connection.supportsLoadSession()) {
+      try {
+        await withTimeout(
+          conn.loadSession({
+            sessionId: persisted,
+            cwd: this.config.workspace,
+            mcpServers: [],
+          }),
+          Math.min(this.config.timeoutMs, 60_000),
+          "ACP loadSession timed out",
+        );
+        console.log(
+          `[codex:acp] loaded persisted session ${persisted} for ${conversationId}`,
+        );
+        this.sessions.set(conversationId, persisted);
+        return persisted;
+      } catch (error) {
+        console.warn(
+          `[codex:acp] failed to load persisted session ${persisted}; creating a new one`,
+          error,
+        );
+        this.persistedSessions.delete(conversationId);
+        this.savePersistedSessions();
+      }
+    }
+
     const response = await withTimeout(
       conn.newSession({
         cwd: this.config.workspace,
@@ -117,6 +162,8 @@ export class AcpCodexBackend implements CodexBackend {
       "ACP newSession timed out",
     );
     this.sessions.set(conversationId, response.sessionId);
+    this.persistedSessions.set(conversationId, response.sessionId);
+    this.savePersistedSessions();
     return response.sessionId;
   }
 
@@ -126,11 +173,52 @@ export class AcpCodexBackend implements CodexBackend {
       this.connection.unregisterCollector(sessionId);
       this.sessions.delete(conversationId);
     }
+    this.persistedSessions.delete(conversationId);
+    this.savePersistedSessions();
   }
 
   dispose(): void {
     this.sessions.clear();
+    this.persistedSessions.clear();
     this.queues.clear();
     this.connection.dispose();
+  }
+
+  private loadPersistedSessions(): void {
+    try {
+      const parsed = JSON.parse(
+        fs.readFileSync(this.sessionMapPath, "utf8"),
+      ) as PersistedAcpSessionMap;
+      if (parsed.version !== 1 || !Array.isArray(parsed.sessions)) {
+        return;
+      }
+
+      for (const item of parsed.sessions) {
+        if (item.conversationId && item.sessionId) {
+          this.persistedSessions.set(item.conversationId, item.sessionId);
+        }
+      }
+    } catch {
+      // Missing or invalid persisted map is not fatal; sessions can be rebuilt.
+    }
+  }
+
+  private savePersistedSessions(): void {
+    fs.mkdirSync(this.config.workspace, { recursive: true });
+    const payload: PersistedAcpSessionMap = {
+      version: 1,
+      sessions: [...this.persistedSessions.entries()].map(
+        ([conversationId, sessionId]) => ({
+          conversationId,
+          sessionId,
+          updatedAt: new Date().toISOString(),
+        }),
+      ),
+    };
+
+    fs.writeFileSync(this.sessionMapPath, JSON.stringify(payload, null, 2), {
+      encoding: "utf8",
+      mode: 0o600,
+    });
   }
 }

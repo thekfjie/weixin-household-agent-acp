@@ -192,7 +192,10 @@ async function checkAcpSession(
       Math.min(config.timeoutMs, 60_000),
       "ACP newSession timed out",
     );
-    return ok(name, `session=${response.sessionId}`);
+    return ok(
+      name,
+      `session=${response.sessionId}, loadSession=${connection.supportsLoadSession()}`,
+    );
   } catch (error) {
     return fail(name, error instanceof Error ? error.message : String(error));
   } finally {

@@ -14,7 +14,7 @@
 - 多微信账号绑定：已支持多账号登录、账号列表、角色修改、启停。
 - 权限分层：已支持 admin/family；family 默认最小环境变量和输出过滤。
 - 文件能力：已支持 admin 发送白名单目录文件，包括 CLI、微信 `/file`、自然语言触发、admin 结构化动作标记。
-- 会话管理：已自动按微信 peer 建 active session；`/new`/`/reset` 清上下文；`/sessions` 可查看最近会话。切换历史会话和跨重启 ACP resume 仍是后续项。
+- 会话管理：已自动按微信 peer 建 active session；`/new`/`/reset` 清上下文；`/sessions` 可查看最近会话。ACP sessionId 映射会持久化；如果 adapter 声明支持 `session/load`，服务重启后会尝试恢复。
 - 时间语义：prompt 中统一带北京时间锚点；后续 summary/memory 继续沿用。
 - 输出控制：admin 保留更多错误信息但已做脱敏；family 不返回内部路径、命令、工具细节。
 
@@ -43,7 +43,7 @@ CODEX_ADMIN_ACP_AUTH_MODE=auto
 
 ## 仍未完全完成
 
-- ACP session 跨服务重启恢复：需要确认 adapter 是否提供稳定 resume 能力。
+- ACP session 真正跨重启恢复取决于 adapter 是否声明 `loadSession=true`；本项目已持久化映射并会自动尝试恢复，不支持时自动新建。
 - 定时 sum-up 和 memory/skill：已有 summary 字段和 prompt 锚点，尚未做定时任务。
 - 图片/视频/语音的完整媒体发送：普通文件已通，图片/视频缩略图仍待单独实现。
 - 公众号/文章卡片：iLink 公开结构不稳定，当前只能尽量从文本/XML 摘要。
