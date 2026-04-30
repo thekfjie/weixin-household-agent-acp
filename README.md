@@ -249,6 +249,52 @@ CODEX_FAMILY_ARGS=exec --skip-git-repo-check
 CODEX_TIMEOUT_MS=180000
 ```
 
+### Codex CLI 的官方登录 / API key 模式
+
+推荐让本项目始终调用 `codex exec`，然后用同一个服务用户的 `~/.codex/config.toml` 决定 Codex CLI 走官方登录还是 sub2api/API key。
+
+官方登录模式：
+
+```bash
+codex login
+codex exec --skip-git-repo-check "请用一句话回复：Codex 已接通"
+```
+
+sub2api/API key 模式：先改 `/opt/weixin-household-agent-acp/.env`，填入你的中转站地址和 key：
+
+```env
+CODEX_CLI_AUTH_MODE=api_key
+CODEX_CLI_BASE_URL=https://你的-sub2api/v1
+CODEX_CLI_API_KEY=sk-你的key
+CODEX_CLI_MODEL=gpt-5.4
+CODEX_CLI_REVIEW_MODEL=gpt-5.4
+CODEX_CLI_REASONING_EFFORT=xhigh
+CODEX_CLI_WIRE_API=responses
+CODEX_CLI_DISABLE_RESPONSE_STORAGE=true
+CODEX_CLI_NETWORK_ACCESS=enabled
+CODEX_CLI_CONTEXT_WINDOW=1000000
+CODEX_CLI_AUTO_COMPACT_TOKEN_LIMIT=900000
+```
+
+然后用运行 systemd 的同一个用户写入 Codex CLI 配置。默认安装一般就是当前用户；如果 `systemctl cat weixin-household-agent-acp` 里是 `User=ubuntu`，就直接运行：
+
+```bash
+cd /opt/weixin-household-agent-acp
+node dist/apps/server/configure-codex.js --dry-run
+node dist/apps/server/configure-codex.js --apply
+codex exec --skip-git-repo-check "请用一句话回复：Codex 已接通"
+sudo systemctl restart weixin-household-agent-acp
+```
+
+这个命令会写：
+
+```text
+~/.codex/config.toml
+~/.codex/auth.json
+```
+
+并在覆盖前自动备份旧文件。`--dry-run` 会隐藏 API key，只打印将要写入的配置。
+
 默认环境隔离：
 
 ```env
