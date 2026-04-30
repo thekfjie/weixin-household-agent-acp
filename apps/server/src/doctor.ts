@@ -109,7 +109,29 @@ function checkHttpHealth(port: number): Promise<CheckResult> {
   });
 }
 
+function checkWritableDirectories(
+  name: string,
+  directories: string[],
+): CheckResult {
+  const failures: string[] = [];
+  for (const directory of directories) {
+    try {
+      fs.mkdirSync(directory, { recursive: true });
+      fs.accessSync(directory, fs.constants.R_OK | fs.constants.W_OK);
+    } catch (error) {
+      failures.push(
+        `${directory}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  return failures.length === 0
+    ? ok(name, directories.join(", "))
+    : fail(name, failures.join("; "));
+}
+
 async function run(): Promise<void> {
+  const outputJson = process.argv.includes("--json");
   const runCodex = process.argv.includes("--codex");
   const results: CheckResult[] = [checkNode()];
   const config = loadConfig();
@@ -131,6 +153,18 @@ async function run(): Promise<void> {
       ),
     );
   }
+
+  results.push(
+    checkWritableDirectories("文件发送白名单目录", config.fileSend.allowedDirs),
+  );
+  results.push(
+    config.codex.family.envMode === "minimal"
+      ? ok("family 环境隔离", "CODEX_FAMILY_ENV_MODE=minimal")
+      : fail(
+          "family 环境隔离",
+          `CODEX_FAMILY_ENV_MODE=${config.codex.family.envMode}`,
+        ),
+  );
 
   try {
     const database = new AppDatabase(
@@ -170,12 +204,13 @@ async function run(): Promise<void> {
 
   results.push(await checkHttpHealth(config.server.port));
 
-  let failed = 0;
-  for (const result of results) {
-    if (!result.ok) {
-      failed += 1;
+  const failed = results.filter((result) => !result.ok).length;
+  if (outputJson) {
+    console.log(JSON.stringify({ results }, null, 2));
+  } else {
+    for (const result of results) {
+      console.log(`${result.ok ? "OK" : "FAIL"}  ${result.name}  ${result.detail}`);
     }
-    console.log(`${result.ok ? "OK" : "FAIL"}  ${result.name}  ${result.detail}`);
   }
 
   if (failed > 0) {

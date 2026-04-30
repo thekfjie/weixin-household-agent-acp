@@ -61,6 +61,7 @@ systemctl cat weixin-household-agent-acp
 ```bash
 cd /opt/weixin-household-agent-acp
 node dist/apps/server/doctor.js
+node dist/apps/server/doctor.js --json
 ```
 
 如果你已经装过旧版本，现在要更新到最新代码并重启：
