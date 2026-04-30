@@ -4,6 +4,42 @@
 
 目标是让家里人直接在微信里和 AI 聊，同时保留一个高权限 `admin` 身份用于运维、代码和系统任务。服务长期运行在 Linux 服务器上，业务时间统一按北京时间理解。
 
+## 架构流转图
+
+### 运行链路
+
+```mermaid
+flowchart TD
+  A["家人/admin 微信"] --> B["iLink 微信 transport"]
+  B --> C["HTTP/轮询 worker"]
+  C --> D["账号与角色路由<br/>admin / family"]
+  D --> E["会话管理<br/>自动建会话、北京时间锚点、上下文整理"]
+  E --> F{"Codex 后端"}
+  F -->|"cli"| G["codex exec<br/>一次性非交互调用"]
+  F -->|"acp"| H["codex-acp 长连接<br/>ACP session / 流式 chunk 收集"]
+  G --> I["输出过滤<br/>family 隐藏内部路径/命令/思考信息"]
+  H --> I
+  I --> J["iLink sendmessage"]
+  J --> A
+```
+
+### 部署身份和 Codex 登录态
+
+```mermaid
+flowchart TD
+  U["Linux 服务用户<br/>推荐单机先用 ubuntu"] --> S["systemd User=同一个用户"]
+  U --> H["HOME=/home/同一个用户"]
+  H --> C["~/.codex/config.toml<br/>~/.codex/auth.json"]
+  S --> P["Node 服务进程"]
+  P --> CLI["CLI 后端: codex exec"]
+  P --> ACP["ACP 后端: node_modules/.bin/codex-acp"]
+  CLI --> C
+  ACP --> C
+  W["不推荐: /usr/local/bin/codex<br/>偷偷 sudo 到另一个用户"] -. "会让 CLI 和 ACP 看到不同登录态" .-> CLI
+```
+
+最重要的规则：`systemd User=`、`HOME`、`~/.codex` 登录态、`codex-acp` 看到的用户必须一致。你的服务器如果选择 `ubuntu`，就让 `ubuntu` 自己拥有 `/home/ubuntu/.codex`；不要让 `ubuntu` 表面调用 `codex`，实际被 wrapper 转发到 `wxbot`。
+
 ## 一键部署
 
 ### 服务器上按这个顺序做
@@ -56,13 +92,18 @@ codex exec --skip-git-repo-check "请用一句话回复：Codex 已接通"
 systemctl cat weixin-household-agent-acp
 ```
 
+当前一键脚本不会替你安装官方 Codex CLI，它只会安装本项目依赖，并把 `codex-acp` 作为项目依赖放在 `node_modules/.bin/codex-acp`。Codex CLI 建议安装在服务用户自己的用户目录里，例如 `ubuntu` 用户的 `~/.local/bin` 或 `~/.local/share/pnpm`，然后在 `.env` 里用绝对路径指向它。不要用 `/usr/local/bin/codex` 做“所有用户都 sudo 到另一个用户”的 wrapper，这会让 CLI 后端和 ACP 后端看到不同的登录态。
+
 运行自检：
 
 ```bash
 cd /opt/weixin-household-agent-acp
 node dist/apps/server/doctor.js
 node dist/apps/server/doctor.js --json
+node dist/apps/server/doctor.js --acp-session
 ```
+
+`doctor.js --acp-session` 会真的启动 `codex-acp` 并建一个 ACP session。只要你启用了 `CODEX_ADMIN_BACKEND=acp`，判断 ACP 是否可用就以这条为准；`codex exec` 成功只能证明 CLI 后端可用。
 
 如果你已经装过旧版本，现在要更新到最新代码并重启：
 
@@ -141,9 +182,15 @@ curl -fsSL https://raw.githubusercontent.com/thekfjie/weixin-household-agent-acp
 - 入口命令必须由普通登录用户执行，不要用 `sudo bash ...`。
 - 如果 `/opt` 只有 root 可写，bootstrap 会用 `sudo` 创建 `/opt/weixin-household-agent-acp`，并只把这个项目目录 `chown` 给当前用户，方便后续 `git pull`、依赖安装和构建；不会修改 `/opt` 本身。
 - 安装器会在需要写入 `/var/lib/weixin-household-agent-acp`、`/etc/systemd/system`、`/etc/sudoers.d` 和执行 `systemctl` 时单独请求 sudo。
-- 默认 `USER_MODE=current`，systemd 服务用当前登录用户运行，适合你自己的 admin Codex 环境。
-- 如果选择 `USER_MODE=dedicated`，安装器会创建或复用专用服务用户；卸载时只有安装器创建的用户才会自动删除。
+- 默认 `USER_MODE=current`，systemd 服务用当前登录用户运行。单人服务器上推荐直接用 `ubuntu`：最简单，Codex 官方登录、git pull、构建和服务运行都在同一个用户下。
+- 如果一台机器上还有别的微信机器人或别的 Codex 服务，推荐 `USER_MODE=dedicated` 创建专用服务用户，避免不同项目共用同一个 `~/.codex`、缓存和运行权限。卸载时只有安装器创建的用户才会自动删除。
 - 默认 `PERMISSION_MODE=none`，不会给服务用户额外 sudo 权限；`limited/full` 要明确知道风险后再开。
+
+这里说的“隔离”分三层：
+
+- Linux 用户隔离：服务只用一个明确用户运行，数据目录和 `~/.codex` 都归这个用户，避免 `ubuntu`、`root`、`wxbot` 混用。
+- admin/family 逻辑隔离：admin 能用运维命令和文件命令，family 默认过滤内部路径、命令和思考信息。
+- Codex 运行环境隔离：`CODEX_ADMIN_ENV_MODE=inherit`，`CODEX_FAMILY_ENV_MODE=minimal`，family 子进程只继承最少环境变量。注意这不是容器沙箱；如果 admin 开 full-auto/sudo，它仍然是高权限运维入口。
 
 常用覆盖方式：
 
