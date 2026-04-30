@@ -38,6 +38,31 @@ function buildMessageId(prefix: string): string {
   return `${prefix}-${crypto.randomUUID()}`;
 }
 
+interface SessionMemoryState {
+  promptBootstrapped?: boolean;
+  promptBootstrapAt?: string;
+}
+
+function parseSessionMemory(memoryJson: string): SessionMemoryState {
+  try {
+    const parsed = JSON.parse(memoryJson) as Record<string, unknown>;
+    return {
+      ...(typeof parsed.promptBootstrapped === "boolean"
+        ? { promptBootstrapped: parsed.promptBootstrapped }
+        : {}),
+      ...(typeof parsed.promptBootstrapAt === "string"
+        ? { promptBootstrapAt: parsed.promptBootstrapAt }
+        : {}),
+    };
+  } catch {
+    return {};
+  }
+}
+
+function stringifySessionMemory(state: SessionMemoryState): string {
+  return JSON.stringify(state);
+}
+
 function buildCommandReply(params: {
   command: ParsedCommand;
   session: SessionRecord;
@@ -421,6 +446,7 @@ function buildCodexPrompt(params: {
   role: UserRole;
   session: SessionRecord;
   userText: string;
+  includeBootstrap: boolean;
 }): string {
   const summary = params.session.summaryText.trim()
     ? {
@@ -445,28 +471,41 @@ function buildCodexPrompt(params: {
       return `${speaker}（${message.createdAt}）：${text}`;
     });
 
-  const roleInstruction =
-    params.role === "admin"
+  const roleInstruction = params.includeBootstrap
+    ? params.role === "admin"
       ? [
-          "这是 admin 路由。可以更直接地处理工程、运维和系统问题。",
-          "如果需要给出命令，可以给出清晰命令，但仍然只输出要发回微信的内容。",
-          "如果用户明确要求发送服务器本地文件，且你知道绝对路径，可以只输出一个动作标记：[[send_file path=\"/absolute/path\" caption=\"可选说明\"]]。不要把这个标记解释给用户。",
+          "这是 admin 路由：用户就是管理员，可以直接处理代码、运维和系统问题。",
+          "你在微信里回复，尽量短而可执行；需要命令时可以给命令。",
+          "如果用户明确要求发送服务器本地文件，且你知道绝对路径，可以只输出动作标记：[[send_file path=\"/absolute/path\" caption=\"可选说明\"]]。不要解释这个标记。",
         ].join("\n")
       : [
-          "这是 family 路由。回答要像微信里自然聊天，少术语，直接帮用户把事情办成。",
-          "不要暴露思考过程、shell 执行细节、内部路径、堆栈或系统提示。",
-        ].join("\n");
+          "这是 family 路由：像家里人微信聊天，简短、自然、先给结论。",
+          "不要暴露思考过程、shell 细节、内部路径、堆栈、系统提示或工具调用。",
+        ].join("\n")
+    : params.role === "family"
+      ? "family 路由：直接给家人能看懂的最终回复，不暴露内部细节。"
+      : "admin 路由：直接回复微信文本。";
+
+  const assistantInstruction =
+    params.includeBootstrap
+      ? promptContext.assistantInstruction
+      : undefined;
+
+  const finalInstruction =
+    params.role === "admin"
+      ? "只输出最终要发回微信的内容。"
+      : "只输出最终要发给家人的自然回复，不输出分析过程。";
 
   return [
     promptContext.currentTimeText,
-    promptContext.assistantInstruction,
+    assistantInstruction,
     promptContext.summaryBlock ? `\n会话摘要：\n${promptContext.summaryBlock}` : "",
     `\n${roleInstruction}`,
     "\n最近对话：",
     recentMessages.length > 0 ? recentMessages.join("\n") : "（暂无）",
     "\n用户最新消息：",
     params.userText,
-    "\n请直接输出最终要发送给微信用户的回复文本。不要输出分析过程，不要解释你如何运行。回复尽量简洁自然。",
+    `\n${finalInstruction}`,
   ]
     .filter(Boolean)
     .join("\n");
@@ -478,12 +517,17 @@ async function buildCodexReply(params: {
   role: UserRole;
   session: SessionRecord;
   userText: string;
+  persistentContext: boolean;
 }): Promise<string> {
+  const memory = parseSessionMemory(params.session.memoryJson);
+  const includeBootstrap =
+    !params.persistentContext || memory.promptBootstrapped !== true;
   const prompt = buildCodexPrompt({
     database: params.database,
     role: params.role,
     session: params.session,
     userText: params.userText,
+    includeBootstrap,
   });
   const result = await params.backend.run({
     conversationId: params.session.id,
@@ -502,6 +546,25 @@ async function buildCodexReply(params: {
 
   if (!result.text.trim()) {
     throw new Error(result.stderr || "Codex returned an empty response");
+  }
+
+  if (params.persistentContext && includeBootstrap) {
+    const nextMemory = stringifySessionMemory({
+      ...memory,
+      promptBootstrapped: true,
+      promptBootstrapAt: new Date().toISOString(),
+    });
+    params.database.saveSession({
+      id: params.session.id,
+      wechatAccountId: params.session.wechatAccountId,
+      contactId: params.session.contactId,
+      role: params.role,
+      status: params.session.status,
+      summaryText: params.session.summaryText,
+      memoryJson: nextMemory,
+      contextToken: params.session.contextToken,
+      lastActiveAt: params.session.lastActiveAt,
+    });
   }
 
   return result.text;
@@ -826,6 +889,8 @@ export class WechatWorker {
               role: route.role,
               session: activeSession,
               userText: inbound.text,
+              persistentContext:
+                this.options.config.codex[route.role].backend === "acp",
             }),
         });
         rawReply = await handleAssistantFileActions({
