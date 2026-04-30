@@ -693,6 +693,8 @@ async function bootstrap(): Promise<void> {
   console.log(
     `[bootstrap] family workspace: ${config.codex.family.workspace}`,
   );
+  console.log(`[bootstrap] admin codex backend: ${config.codex.admin.backend}`);
+  console.log(`[bootstrap] family codex backend: ${config.codex.family.backend}`);
   console.log(
     `[bootstrap] file send allowed dirs: ${config.fileSend.allowedDirs.join(", ")}`,
   );

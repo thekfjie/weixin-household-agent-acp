@@ -1,0 +1,136 @@
+import fs from "node:fs";
+import crypto from "node:crypto";
+import type { ContentBlock, SessionId } from "@agentclientprotocol/sdk";
+import { CodexRuntimeConfig } from "../config/types.js";
+import { AcpConnection } from "./acp-connection.js";
+import { AcpResponseCollector } from "./acp-response-collector.js";
+import { CodexBackend, CodexBackendRequest } from "./backend-types.js";
+import { CodexRunResult } from "./types.js";
+
+function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string,
+): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  return Promise.race([
+    promise,
+    new Promise<T>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+    }),
+  ]).finally(() => {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  });
+}
+
+export class AcpCodexBackend implements CodexBackend {
+  private readonly connection: AcpConnection;
+
+  private readonly sessions = new Map<string, SessionId>();
+
+  private readonly queues = new Map<string, Promise<unknown>>();
+
+  constructor(private readonly config: CodexRuntimeConfig) {
+    this.connection = new AcpConnection(config, () => {
+      this.sessions.clear();
+      this.queues.clear();
+    });
+  }
+
+  async run(request: CodexBackendRequest): Promise<CodexRunResult> {
+    const previous = this.queues.get(request.conversationId) ?? Promise.resolve();
+    const next = previous
+      .catch(() => undefined)
+      .then(() => this.runOnce(request));
+    this.queues.set(request.conversationId, next);
+
+    try {
+      return await next;
+    } finally {
+      if (this.queues.get(request.conversationId) === next) {
+        this.queues.delete(request.conversationId);
+      }
+    }
+  }
+
+  private async runOnce(request: CodexBackendRequest): Promise<CodexRunResult> {
+    fs.mkdirSync(this.config.workspace, { recursive: true });
+
+    const conn = await withTimeout(
+      this.connection.ensureReady(),
+      Math.min(this.config.timeoutMs, 60_000),
+      "ACP connection timed out",
+    );
+    const sessionId = await this.getOrCreateSession(request.conversationId, conn);
+    const collector = new AcpResponseCollector();
+    const prompt: ContentBlock[] = [
+      {
+        type: "text",
+        text: request.prompt,
+      },
+    ];
+
+    this.connection.registerCollector(sessionId, collector);
+    try {
+      const response = await withTimeout(
+        conn.prompt({
+          sessionId,
+          prompt,
+          messageId: crypto.randomUUID(),
+        }),
+        this.config.timeoutMs,
+        `ACP prompt timed out after ${this.config.timeoutMs}ms`,
+      );
+      const text = collector.toText();
+
+      return {
+        text,
+        stderr:
+          response.stopReason === "end_turn"
+            ? ""
+            : `ACP stop reason: ${response.stopReason}`,
+        exitCode: response.stopReason === "end_turn" ? 0 : 1,
+        timedOut: false,
+      };
+    } finally {
+      this.connection.unregisterCollector(sessionId);
+    }
+  }
+
+  private async getOrCreateSession(
+    conversationId: string,
+    conn: Awaited<ReturnType<AcpConnection["ensureReady"]>>,
+  ): Promise<SessionId> {
+    const existing = this.sessions.get(conversationId);
+    if (existing) {
+      return existing;
+    }
+
+    const response = await withTimeout(
+      conn.newSession({
+        cwd: this.config.workspace,
+        mcpServers: [],
+      }),
+      Math.min(this.config.timeoutMs, 60_000),
+      "ACP newSession timed out",
+    );
+    this.sessions.set(conversationId, response.sessionId);
+    return response.sessionId;
+  }
+
+  clearSession(conversationId: string): void {
+    const sessionId = this.sessions.get(conversationId);
+    if (sessionId) {
+      this.connection.unregisterCollector(sessionId);
+      this.sessions.delete(conversationId);
+    }
+  }
+
+  dispose(): void {
+    this.sessions.clear();
+    this.queues.clear();
+    this.connection.dispose();
+  }
+}

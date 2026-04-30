@@ -3,7 +3,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { AppConfig, UserRole } from "../../config/types.js";
 import { ParsedCommand, parseBuiltInCommand } from "../../commands/index.js";
-import { buildCodexCommand, runCodexInvocation } from "../../codex/index.js";
+import {
+  CodexBackend,
+  createCodexBackend,
+} from "../../codex/index.js";
 import {
   assertFileAllowedForWechatCommand,
   sendLocalFileToSession,
@@ -330,27 +333,26 @@ function buildCodexPrompt(params: {
 }
 
 async function buildCodexReply(params: {
-  config: AppConfig;
+  backend: CodexBackend;
   database: AppDatabase;
   role: UserRole;
   session: SessionRecord;
   userText: string;
 }): Promise<string> {
-  const runtimeConfig =
-    params.role === "admin"
-      ? params.config.codex.admin
-      : params.config.codex.family;
   const prompt = buildCodexPrompt({
     database: params.database,
     role: params.role,
     session: params.session,
     userText: params.userText,
   });
-  const invocation = buildCodexCommand(runtimeConfig, prompt);
-  const result = await runCodexInvocation(invocation);
+  const result = await params.backend.run({
+    conversationId: params.session.id,
+    prompt,
+    role: params.role,
+  });
 
   if (result.timedOut) {
-    throw new Error(`Codex timed out after ${invocation.timeoutMs}ms`);
+    throw new Error("Codex timed out");
   }
 
   if (result.exitCode !== 0) {
@@ -436,7 +438,14 @@ export class WechatWorker {
 
   private loopPromise: Promise<void> | undefined;
 
-  constructor(private readonly options: WechatWorkerOptions) {}
+  private readonly codexBackends: Record<UserRole, CodexBackend>;
+
+  constructor(private readonly options: WechatWorkerOptions) {
+    this.codexBackends = {
+      admin: createCodexBackend(options.config.codex.admin),
+      family: createCodexBackend(options.config.codex.family),
+    };
+  }
 
   start(): void {
     if (this.running) {
@@ -450,6 +459,8 @@ export class WechatWorker {
   async stop(): Promise<void> {
     this.running = false;
     await this.loopPromise;
+    this.codexBackends.admin.dispose();
+    this.codexBackends.family.dispose();
   }
 
   private async runLoop(): Promise<void> {
@@ -549,6 +560,10 @@ export class WechatWorker {
 
     if (parsedCommand) {
       try {
+        if (parsedCommand.name === "/new" || parsedCommand.name === "/reset") {
+          this.codexBackends[route.role].clearSession(activeSession.id);
+        }
+
         rawReply =
           parsedCommand.name === "/file" || parsedCommand.name === "/sendfile"
             ? await handleFileCommand({
@@ -582,7 +597,7 @@ export class WechatWorker {
           contextToken: inbound.contextToken,
           work: () =>
             buildCodexReply({
-              config: this.options.config,
+              backend: this.codexBackends[route.role],
               database: this.options.database,
               role: route.role,
               session: activeSession,

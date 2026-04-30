@@ -247,10 +247,27 @@ bash /opt/weixin-household-agent-acp/infra/scripts/linux/uninstall.sh --yes --ke
 ```env
 CODEX_ADMIN_COMMAND=codex
 CODEX_ADMIN_ARGS=exec --skip-git-repo-check
+CODEX_ADMIN_BACKEND=cli
 CODEX_FAMILY_COMMAND=codex
 CODEX_FAMILY_ARGS=exec --skip-git-repo-check
+CODEX_FAMILY_BACKEND=cli
 CODEX_TIMEOUT_MS=180000
 ```
+
+默认 `cli` 后端会按每条消息调用一次 `codex exec`。如果要改成 ACP 长连接后端，需要先让服务用户能运行 `codex-acp`，再改：
+
+```env
+CODEX_ADMIN_BACKEND=acp
+CODEX_ADMIN_ACP_COMMAND=codex-acp
+CODEX_ADMIN_ACP_ARGS=
+CODEX_FAMILY_BACKEND=acp
+CODEX_FAMILY_ACP_COMMAND=codex-acp
+CODEX_FAMILY_ACP_ARGS=
+```
+
+ACP 后端会为每个微信会话维护一个 ACP session，并收集 `agent_message_chunk` 流式输出后再发回微信。`/new` 或 `/reset` 会清掉对应的 ACP session 映射。当前映射是进程内的，服务重启后会重新建 session；这已经能避免每条消息都冷启动，但还不是跨重启持久恢复。
+
+权限说明：本项目的 ACP client 默认拒绝 agent 的权限请求，不会自动批准工具调用。这样 family 链路更安全；admin 如果以后要开放更强工具权限，需要再明确配置。
 
 ### Codex CLI 的官方登录 / API key 模式
 

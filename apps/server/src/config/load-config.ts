@@ -1,7 +1,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { AppConfig, CodexEnvMode, CodexMode } from "./types.js";
+import {
+  AppConfig,
+  CodexBackendKind,
+  CodexEnvMode,
+  CodexMode,
+} from "./types.js";
 
 const VALID_CODEX_MODES: readonly CodexMode[] = [
   "suggest",
@@ -9,6 +14,7 @@ const VALID_CODEX_MODES: readonly CodexMode[] = [
   "full-auto",
 ];
 const VALID_CODEX_ENV_MODES: readonly CodexEnvMode[] = ["inherit", "minimal"];
+const VALID_CODEX_BACKENDS: readonly CodexBackendKind[] = ["cli", "acp"];
 
 let dotEnvLoaded = false;
 
@@ -108,6 +114,15 @@ function readEnvMode(name: string, fallback: CodexEnvMode): CodexEnvMode {
   return raw;
 }
 
+function readBackend(name: string, fallback: CodexBackendKind): CodexBackendKind {
+  const raw = (process.env[name] ?? fallback) as CodexBackendKind;
+  if (!VALID_CODEX_BACKENDS.includes(raw)) {
+    throw new Error(`Environment variable ${name} is not a valid Codex backend: ${raw}`);
+  }
+
+  return raw;
+}
+
 function readPositiveInteger(name: string, fallback: number): number {
   const raw = process.env[name];
   if (!raw) {
@@ -180,9 +195,17 @@ function splitCommandArgs(raw: string): string[] {
   return args;
 }
 
-function readCodexArgs(name: string): string[] {
+function readArgs(name: string, fallback: string[]): string[] {
   const raw = process.env[name]?.trim();
-  return raw ? splitCommandArgs(raw) : ["exec", "--skip-git-repo-check"];
+  return raw ? splitCommandArgs(raw) : fallback;
+}
+
+function readCodexArgs(name: string): string[] {
+  return readArgs(name, ["exec", "--skip-git-repo-check"]);
+}
+
+function readAcpArgs(name: string): string[] {
+  return readArgs(name, []);
 }
 
 function readPathList(name: string, fallback: string[]): string[] {
@@ -210,6 +233,10 @@ function resolveDefaultCodexCommand(): string {
   return process.platform === "win32" ? "codex.cmd" : "codex";
 }
 
+function resolveDefaultAcpCommand(): string {
+  return process.platform === "win32" ? "codex-acp.cmd" : "codex-acp";
+}
+
 function resolveDefaultCodexWorkspace(name: "admin" | "family"): string {
   return name === "admin"
     ? "./runtime/codex-admin"
@@ -223,6 +250,7 @@ export function loadConfig(): AppConfig {
   const routeTag = process.env.WECHAT_ROUTE_TAG?.trim() || undefined;
   const adminMode = readMode("CODEX_ADMIN_MODE", "full-auto");
   const familyMode = readMode("CODEX_FAMILY_MODE", "suggest");
+  const codexBackend = readBackend("CODEX_BACKEND", "cli");
   const codexTimeoutMs = readPositiveInteger("CODEX_TIMEOUT_MS", 180_000);
   const fileAllowedDirs = readPathList("FILE_SEND_ALLOWED_DIRS", [
     path.join(dataDir, "outbox"),
@@ -249,8 +277,11 @@ export function loadConfig(): AppConfig {
     },
     codex: {
       admin: {
+        backend: readBackend("CODEX_ADMIN_BACKEND", codexBackend),
         command: readEnv("CODEX_ADMIN_COMMAND", resolveDefaultCodexCommand()),
         args: readCodexArgs("CODEX_ADMIN_ARGS"),
+        acpCommand: readEnv("CODEX_ADMIN_ACP_COMMAND", resolveDefaultAcpCommand()),
+        acpArgs: readAcpArgs("CODEX_ADMIN_ACP_ARGS"),
         mode: adminMode,
         timeoutMs: readPositiveInteger(
           "CODEX_ADMIN_TIMEOUT_MS",
@@ -266,8 +297,11 @@ export function loadConfig(): AppConfig {
         envPassthrough: readNameList("CODEX_ADMIN_ENV_PASSTHROUGH"),
       },
       family: {
+        backend: readBackend("CODEX_FAMILY_BACKEND", codexBackend),
         command: readEnv("CODEX_FAMILY_COMMAND", resolveDefaultCodexCommand()),
         args: readCodexArgs("CODEX_FAMILY_ARGS"),
+        acpCommand: readEnv("CODEX_FAMILY_ACP_COMMAND", resolveDefaultAcpCommand()),
+        acpArgs: readAcpArgs("CODEX_FAMILY_ACP_ARGS"),
         mode: familyMode,
         timeoutMs: readPositiveInteger(
           "CODEX_FAMILY_TIMEOUT_MS",

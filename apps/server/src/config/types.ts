@@ -2,10 +2,14 @@ export type UserRole = "admin" | "family";
 
 export type CodexMode = "suggest" | "auto-edit" | "full-auto";
 export type CodexEnvMode = "inherit" | "minimal";
+export type CodexBackendKind = "cli" | "acp";
 
 export interface CodexRuntimeConfig {
+  backend: CodexBackendKind;
   command: string;
   args: string[];
+  acpCommand: string;
+  acpArgs: string[];
   mode: CodexMode;
   timeoutMs: number;
   workspace: string;

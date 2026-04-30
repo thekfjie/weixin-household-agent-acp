@@ -105,7 +105,10 @@ function normalizeCodexStdout(stdout: string): string {
   return trimOutput(stdout);
 }
 
-function buildChildEnv(invocation: CodexInvocation): NodeJS.ProcessEnv {
+export function buildChildEnv(invocation: {
+  envMode: "inherit" | "minimal";
+  envPassthrough: string[];
+}): NodeJS.ProcessEnv {
   if (invocation.envMode === "inherit") {
     return process.env;
   }

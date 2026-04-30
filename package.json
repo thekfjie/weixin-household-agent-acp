@@ -27,6 +27,7 @@
     "typescript": "^5.9.3"
   },
   "dependencies": {
+    "@agentclientprotocol/sdk": "^0.21.0",
     "qrcode": "^1.5.4"
   }
 }

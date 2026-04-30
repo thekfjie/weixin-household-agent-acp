@@ -165,6 +165,12 @@ async function run(): Promise<void> {
           `CODEX_FAMILY_ENV_MODE=${config.codex.family.envMode}`,
         ),
   );
+  results.push(
+    ok(
+      "Codex backend",
+      `admin=${config.codex.admin.backend}, family=${config.codex.family.backend}`,
+    ),
+  );
 
   try {
     const database = new AppDatabase(
@@ -191,6 +197,15 @@ async function run(): Promise<void> {
   results.push(await checkCommand(config.codex.admin.command, ["--version"]));
   if (config.codex.family.command !== config.codex.admin.command) {
     results.push(await checkCommand(config.codex.family.command, ["--version"]));
+  }
+  if (config.codex.admin.backend === "acp") {
+    results.push(await checkCommand(config.codex.admin.acpCommand, ["--version"]));
+  }
+  if (
+    config.codex.family.backend === "acp" &&
+    config.codex.family.acpCommand !== config.codex.admin.acpCommand
+  ) {
+    results.push(await checkCommand(config.codex.family.acpCommand, ["--version"]));
   }
 
   if (runCodex) {
