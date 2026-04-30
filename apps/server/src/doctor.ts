@@ -80,6 +80,15 @@ function checkCommand(command: string, args: string[]): Promise<CheckResult> {
   });
 }
 
+async function checkAcpCommand(command: string): Promise<CheckResult> {
+  const result = await checkCommand(command, ["--help"]);
+  if (!result.ok) {
+    return result;
+  }
+
+  return ok(command, result.detail || "ACP adapter is callable");
+}
+
 function checkHttpHealth(port: number): Promise<CheckResult> {
   return new Promise((resolve) => {
     const request = http.get(
@@ -199,13 +208,13 @@ async function run(): Promise<void> {
     results.push(await checkCommand(config.codex.family.command, ["--version"]));
   }
   if (config.codex.admin.backend === "acp") {
-    results.push(await checkCommand(config.codex.admin.acpCommand, ["--version"]));
+    results.push(await checkAcpCommand(config.codex.admin.acpCommand));
   }
   if (
     config.codex.family.backend === "acp" &&
     config.codex.family.acpCommand !== config.codex.admin.acpCommand
   ) {
-    results.push(await checkCommand(config.codex.family.acpCommand, ["--version"]));
+    results.push(await checkAcpCommand(config.codex.family.acpCommand));
   }
 
   if (runCodex) {
