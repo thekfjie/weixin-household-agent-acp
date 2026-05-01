@@ -5,6 +5,7 @@ import {
   ILinkApiClient,
 } from "./api-client.js";
 import {
+  ILinkCdnMedia,
   ILinkGetUploadUrlResponse,
   ILinkMessageItemType,
   ILinkMessageState,
@@ -15,6 +16,7 @@ import {
 } from "./protocol.js";
 
 const CDN_UPLOAD_RETRIES = 3;
+const CDN_DOWNLOAD_TIMEOUT_MS = 60_000;
 
 function aesEcbPaddedSize(plaintextSize: number): number {
   return Math.ceil((plaintextSize + 1) / 16) * 16;
@@ -23,6 +25,30 @@ function aesEcbPaddedSize(plaintextSize: number): number {
 function encryptAesEcb(plaintext: Buffer, aesKey: Buffer): Buffer {
   const cipher = crypto.createCipheriv("aes-128-ecb", aesKey, null);
   return Buffer.concat([cipher.update(plaintext), cipher.final()]);
+}
+
+function decryptAesEcb(ciphertext: Buffer, aesKey: Buffer): Buffer {
+  const decipher = crypto.createDecipheriv("aes-128-ecb", aesKey, null);
+  return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+}
+
+function parseAesKey(value: string): Buffer {
+  const trimmed = value.trim();
+  if (/^[0-9a-fA-F]{32}$/.test(trimmed)) {
+    return Buffer.from(trimmed, "hex");
+  }
+
+  const decoded = Buffer.from(trimmed, "base64");
+  if (decoded.length === 16) {
+    return decoded;
+  }
+
+  const decodedText = decoded.toString("utf8").trim();
+  if (/^[0-9a-fA-F]{32}$/.test(decodedText)) {
+    return Buffer.from(decodedText, "hex");
+  }
+
+  throw new Error("Unsupported iLink media AES key encoding");
 }
 
 function buildUploadUrl(params: {
@@ -38,6 +64,15 @@ function buildUploadUrl(params: {
   return `${params.cdnBaseUrl}/upload?encrypted_query_param=${encodeURIComponent(
     params.uploadParam,
   )}&filekey=${encodeURIComponent(params.fileKey)}`;
+}
+
+function buildDownloadUrl(params: {
+  cdnBaseUrl: string;
+  encryptedQueryParam: string;
+}): string {
+  return `${params.cdnBaseUrl}/download?encrypted_query_param=${encodeURIComponent(
+    params.encryptedQueryParam,
+  )}`;
 }
 
 function describeUploadUrl(url: string): string {
@@ -136,6 +171,82 @@ export async function uploadEncryptedBufferToCdn(params: {
   throw lastError instanceof Error
     ? lastError
     : new Error("CDN upload failed after retries");
+}
+
+export async function downloadEncryptedMediaFromCdn(params: {
+  client: ILinkApiClient;
+  media: ILinkCdnMedia;
+  aesKeyOverride?: string;
+  maxPlaintextBytes: number;
+  expectedMd5?: string;
+  expectedSize?: number;
+}): Promise<Buffer> {
+  const encryptedQueryParam = params.media.encrypt_query_param?.trim();
+  const encodedAesKey =
+    params.aesKeyOverride?.trim() || params.media.aes_key?.trim();
+  if (!encryptedQueryParam) {
+    throw new Error("Inbound media is missing encrypt_query_param");
+  }
+  if (!encodedAesKey) {
+    throw new Error("Inbound media is missing aes_key");
+  }
+
+  if (
+    params.expectedSize !== undefined &&
+    params.expectedSize > params.maxPlaintextBytes
+  ) {
+    throw new Error(
+      `Inbound media is too large: ${params.expectedSize} bytes`,
+    );
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), CDN_DOWNLOAD_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(
+      buildDownloadUrl({
+        cdnBaseUrl: params.client.cdnBaseUrl,
+        encryptedQueryParam,
+      }),
+      {
+        method: "GET",
+        signal: controller.signal,
+      },
+    );
+
+    if (!response.ok) {
+      const message =
+        response.headers.get("x-error-message") ?? (await response.text());
+      throw new Error(`CDN download failed ${response.status}: ${message}`);
+    }
+
+    const ciphertext = Buffer.from(await response.arrayBuffer());
+    const plaintext = decryptAesEcb(ciphertext, parseAesKey(encodedAesKey));
+    if (plaintext.length > params.maxPlaintextBytes) {
+      throw new Error(`Inbound media is too large: ${plaintext.length} bytes`);
+    }
+
+    if (
+      params.expectedSize !== undefined &&
+      plaintext.length !== params.expectedSize
+    ) {
+      throw new Error(
+        `Inbound media size mismatch: expected ${params.expectedSize}, got ${plaintext.length}`,
+      );
+    }
+
+    if (params.expectedMd5) {
+      const actualMd5 = crypto.createHash("md5").update(plaintext).digest("hex");
+      if (actualMd5.toLowerCase() !== params.expectedMd5.toLowerCase()) {
+        throw new Error("Inbound media MD5 mismatch");
+      }
+    }
+
+    return plaintext;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export async function uploadLocalMedia(params: {

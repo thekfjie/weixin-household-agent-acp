@@ -9,6 +9,7 @@ import {
 } from "../../codex/index.js";
 import {
   assertFileAllowedForWechatCommand,
+  inferMimeType,
   sendLocalFileToSession,
 } from "../../files/index.js";
 import {
@@ -26,9 +27,15 @@ import {
   SessionRecord,
   WechatAccountRecord,
 } from "../../storage/index.js";
-import { sendTextMessage } from "./media.js";
+import {
+  downloadEncryptedMediaFromCdn,
+  sendTextMessage,
+} from "./media.js";
 import { ILinkApiClient } from "./api-client.js";
-import { normalizeInboundWechatMessages } from "./inbound.js";
+import {
+  normalizeInboundWechatMessages,
+  NormalizedInboundAttachment,
+} from "./inbound.js";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -41,6 +48,19 @@ function buildMessageId(prefix: string): string {
 interface SessionMemoryState {
   promptBootstrapped?: boolean;
   promptBootstrapAt?: string;
+  pendingInboundAttachments?: PendingInboundAttachment[];
+}
+
+interface PendingInboundAttachment {
+  id: string;
+  kind: "image" | "file";
+  fileName: string;
+  receivedAt: string;
+  localPath?: string;
+  sizeBytes?: number;
+  md5?: string;
+  downloadStatus: "ready" | "failed";
+  errorMessage?: string;
 }
 
 function parseSessionMemory(memoryJson: string): SessionMemoryState {
@@ -53,10 +73,63 @@ function parseSessionMemory(memoryJson: string): SessionMemoryState {
       ...(typeof parsed.promptBootstrapAt === "string"
         ? { promptBootstrapAt: parsed.promptBootstrapAt }
         : {}),
+      ...(Array.isArray(parsed.pendingInboundAttachments)
+        ? {
+            pendingInboundAttachments: parsed.pendingInboundAttachments
+              .map(parsePendingInboundAttachment)
+              .filter(
+                (item): item is PendingInboundAttachment => Boolean(item),
+              ),
+          }
+        : {}),
     };
   } catch {
     return {};
   }
+}
+
+function parsePendingInboundAttachment(
+  value: unknown,
+): PendingInboundAttachment | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+
+  const record = value as Record<string, unknown>;
+  const kind = record.kind === "image" || record.kind === "file"
+    ? record.kind
+    : undefined;
+  const downloadStatus =
+    record.downloadStatus === "ready" || record.downloadStatus === "failed"
+      ? record.downloadStatus
+      : undefined;
+  if (
+    typeof record.id !== "string" ||
+    !kind ||
+    typeof record.fileName !== "string" ||
+    typeof record.receivedAt !== "string" ||
+    !downloadStatus
+  ) {
+    return undefined;
+  }
+
+  return {
+    id: record.id,
+    kind,
+    fileName: record.fileName,
+    receivedAt: record.receivedAt,
+    ...(typeof record.localPath === "string"
+      ? { localPath: record.localPath }
+      : {}),
+    ...(typeof record.sizeBytes === "number"
+      ? { sizeBytes: record.sizeBytes }
+      : {}),
+    ...(typeof record.md5 === "string" ? { md5: record.md5 } : {}),
+    downloadStatus,
+    ...(typeof record.errorMessage === "string"
+      ? { errorMessage: record.errorMessage }
+      : {}),
+  };
 }
 
 function stringifySessionMemory(state: SessionMemoryState): string {
@@ -215,12 +288,7 @@ function buildFilesReply(params: {
       continue;
     }
 
-    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-      if (!entry.isFile()) {
-        continue;
-      }
-
-      const filePath = path.join(directory, entry.name);
+    for (const filePath of listFilesForReply(directory, 2)) {
       const stat = fs.statSync(filePath);
       if (stat.size > params.config.fileSend.maxBytes) {
         continue;
@@ -251,6 +319,42 @@ function buildFilesReply(params: {
   ].join("\n");
 }
 
+function listFilesForReply(directory: string, maxDepth: number): string[] {
+  const files: string[] = [];
+  const stack: Array<{ directory: string; depth: number }> = [
+    { directory, depth: 0 },
+  ];
+
+  while (stack.length > 0 && files.length < 200) {
+    const current = stack.pop();
+    if (!current) {
+      break;
+    }
+
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(current.directory, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    for (const entry of entries) {
+      const filePath = path.join(current.directory, entry.name);
+      if (entry.isFile()) {
+        files.push(filePath);
+      } else if (entry.isDirectory() && current.depth < maxDepth) {
+        stack.push({ directory: filePath, depth: current.depth + 1 });
+      }
+
+      if (files.length >= 200) {
+        break;
+      }
+    }
+  }
+
+  return files;
+}
+
 function formatBytes(value: number): string {
   if (value < 1024) {
     return `${value} B`;
@@ -266,6 +370,86 @@ function formatBytes(value: number): string {
   }
 
   return `${value} B`;
+}
+
+function sanitizeFileName(fileName: string): string {
+  const sanitized = fileName
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_")
+    .replace(/\s+/g, " ")
+    .trim();
+  return sanitized || "attachment";
+}
+
+function buildInboundAttachmentPath(params: {
+  config: AppConfig;
+  sessionId: string;
+  sourceMessageId: string;
+  index: number;
+  fileName: string;
+}): string {
+  const safeMessageId = params.sourceMessageId.replace(/[^a-zA-Z0-9_.-]/g, "_");
+  const safeFileName = sanitizeFileName(params.fileName);
+  return path.join(
+    params.config.server.dataDir,
+    "inbox",
+    params.sessionId,
+    `${safeMessageId}-${params.index + 1}-${safeFileName}`,
+  );
+}
+
+function buildAttachmentPromptBlock(
+  attachments: PendingInboundAttachment[],
+): string {
+  const lines = attachments.map((attachment, index) => {
+    const parts = [
+      `${index + 1}. ${attachment.kind === "image" ? "图片" : "文件"}：${attachment.fileName}`,
+      attachment.sizeBytes !== undefined
+        ? `大小 ${formatBytes(attachment.sizeBytes)}`
+        : undefined,
+      attachment.localPath && attachment.downloadStatus === "ready"
+        ? `本地路径 ${attachment.localPath}`
+        : undefined,
+      attachment.downloadStatus === "failed"
+        ? `下载失败：${attachment.errorMessage ?? "未知错误"}`
+        : undefined,
+    ].filter(Boolean);
+    return parts.join("，");
+  });
+
+  return [
+    "用户刚才发来的附件：",
+    ...lines,
+    "如果附件已有本地路径，可以读取/处理该文件；如果处理后生成新文件，应写入 outbox 或 office 目录，方便发回微信。",
+  ].join("\n");
+}
+
+function buildMediaAckReply(params: {
+  role: UserRole;
+  attachments: PendingInboundAttachment[];
+}): string {
+  const failed = params.attachments.filter(
+    (attachment) => attachment.downloadStatus === "failed",
+  );
+  if (failed.length === params.attachments.length) {
+    return params.role === "admin"
+      ? [
+          "我看到你发了附件，但下载没有成功。",
+          ...failed.map(
+            (attachment) =>
+              `${attachment.fileName}: ${attachment.errorMessage ?? "未知错误"}`,
+          ),
+          "你可以再发一句要怎么处理，或者稍后重发附件。",
+        ].join("\n")
+      : "我看到你发了附件，但这边暂时没下载成功。你可以再发一句要我怎么处理，或者稍后重发一下。";
+  }
+
+  const names = params.attachments
+    .map((attachment) => attachment.fileName)
+    .slice(0, 3)
+    .join("、");
+  return params.role === "admin"
+    ? `收到附件：${names}。你再发一句处理要求，我再开始处理。`
+    : `收到${names ? `：${names}` : "附件"}。你再说一句想让我怎么处理，我再开始。`;
 }
 
 function extractQuotedText(text: string): string | undefined {
@@ -439,6 +623,102 @@ async function handleFileCommand(params: {
     `大小：${formatBytes(result.sizeBytes)}`,
     `MD5：${result.plaintextMd5}`,
   ].join("\n");
+}
+
+async function downloadInboundAttachments(params: {
+  attachments: NormalizedInboundAttachment[];
+  config: AppConfig;
+  client: ILinkApiClient;
+  database: AppDatabase;
+  session: SessionRecord;
+  sourceMessageId: string;
+  receivedAt: string;
+}): Promise<PendingInboundAttachment[]> {
+  const pending: PendingInboundAttachment[] = [];
+
+  for (const [index, attachment] of params.attachments.entries()) {
+    const id = buildMessageId("inbound-attachment");
+    const fileName = sanitizeFileName(attachment.fileName);
+    const localPath = buildInboundAttachmentPath({
+      config: params.config,
+      sessionId: params.session.id,
+      sourceMessageId: params.sourceMessageId,
+      index,
+      fileName,
+    });
+
+    try {
+      if (!attachment.media) {
+        throw new Error("附件缺少 CDN media 信息");
+      }
+
+      const buffer = await downloadEncryptedMediaFromCdn({
+        client: params.client,
+        media: attachment.media,
+        ...(attachment.aesKeyOverride
+          ? { aesKeyOverride: attachment.aesKeyOverride }
+          : {}),
+        maxPlaintextBytes: params.config.fileSend.maxBytes,
+        ...(attachment.md5 ? { expectedMd5: attachment.md5 } : {}),
+        ...(attachment.kind === "file" && attachment.sizeBytes !== undefined
+          ? { expectedSize: attachment.sizeBytes }
+          : {}),
+      });
+
+      fs.mkdirSync(path.dirname(localPath), { recursive: true });
+      fs.writeFileSync(localPath, buffer);
+      params.database.saveAttachment({
+        id,
+        sessionId: params.session.id,
+        localPath,
+        mimeType: inferMimeType(localPath),
+        fileName,
+        sizeBytes: buffer.length,
+        outboundStatus: "inbound-ready",
+        createdAt: params.receivedAt,
+      });
+      params.database.appendMessage({
+        id: buildMessageId("inbound-file"),
+        sessionId: params.session.id,
+        direction: "inbound",
+        messageType: attachment.kind,
+        filePath: localPath,
+        createdAt: params.receivedAt,
+        sourceMessageId: params.sourceMessageId,
+      });
+
+      pending.push({
+        id,
+        kind: attachment.kind,
+        fileName,
+        receivedAt: params.receivedAt,
+        localPath,
+        sizeBytes: buffer.length,
+        ...(attachment.md5 ? { md5: attachment.md5 } : {}),
+        downloadStatus: "ready",
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`[worker] failed to download inbound ${attachment.kind}`, {
+        fileName,
+        error: message,
+      });
+      pending.push({
+        id,
+        kind: attachment.kind,
+        fileName,
+        receivedAt: params.receivedAt,
+        ...(attachment.sizeBytes !== undefined
+          ? { sizeBytes: attachment.sizeBytes }
+          : {}),
+        ...(attachment.md5 ? { md5: attachment.md5 } : {}),
+        downloadStatus: "failed",
+        errorMessage: message,
+      });
+    }
+  }
+
+  return pending;
 }
 
 function buildCodexPrompt(params: {
@@ -824,20 +1104,102 @@ export class WechatWorker {
       contextToken: inbound.contextToken,
       lastActiveAt: inbound.receivedAt,
     });
+    const sessionMemory = parseSessionMemory(activeSession.memoryJson);
+    const downloadedAttachments =
+      inbound.attachments.length > 0
+        ? await downloadInboundAttachments({
+            attachments: inbound.attachments,
+            config: this.options.config,
+            client,
+            database: this.options.database,
+            session: activeSession,
+            sourceMessageId: inbound.sourceMessageId,
+            receivedAt: inbound.receivedAt,
+          })
+        : [];
 
     this.options.database.appendMessage({
       id: buildMessageId("inbound"),
       sessionId: activeSession.id,
       direction: "inbound",
-      messageType: "text",
-      textContent: inbound.text,
+      messageType: downloadedAttachments.length > 0 ? "mixed" : "text",
+      textContent: [inbound.mediaSummary, inbound.text].filter(Boolean).join("\n"),
       createdAt: inbound.receivedAt,
       sourceMessageId: inbound.sourceMessageId,
     });
 
+    if (downloadedAttachments.length > 0 && !inbound.text.trim()) {
+      const nextMemory = stringifySessionMemory({
+        ...sessionMemory,
+        pendingInboundAttachments: [
+          ...(sessionMemory.pendingInboundAttachments ?? []),
+          ...downloadedAttachments,
+        ].slice(-10),
+      });
+      const nextSession = this.options.database.saveSession({
+        id: activeSession.id,
+        wechatAccountId: activeSession.wechatAccountId,
+        contactId: activeSession.contactId,
+        role: route.role,
+        status: activeSession.status,
+        summaryText: activeSession.summaryText,
+        memoryJson: nextMemory,
+        contextToken: activeSession.contextToken,
+        lastActiveAt: activeSession.lastActiveAt,
+      });
+      const ack = buildMediaAckReply({
+        role: route.role,
+        attachments: downloadedAttachments,
+      });
+      const clientId = await sendTextMessage({
+        client,
+        toUserId: inbound.contactId,
+        contextToken: inbound.contextToken,
+        text: ack,
+      });
+      this.options.database.appendMessage({
+        id: buildMessageId("outbound"),
+        sessionId: nextSession.id,
+        direction: "outbound",
+        messageType: "text",
+        textContent: ack,
+        createdAt: new Date().toISOString(),
+        sourceMessageId: clientId || inbound.sourceMessageId,
+      });
+      return;
+    }
+
     const parsedCommand =
       parseBuiltInCommand(inbound.text) ??
       (route.role === "admin" ? parseNaturalFileRequest(inbound.text) : undefined);
+    const pendingAttachments = parsedCommand
+      ? downloadedAttachments
+      : [
+          ...(sessionMemory.pendingInboundAttachments ?? []),
+          ...downloadedAttachments,
+        ];
+    const userTextForCodex =
+      pendingAttachments.length > 0
+        ? `${buildAttachmentPromptBlock(pendingAttachments)}\n\n用户这次的文字要求：\n${inbound.text}`
+        : inbound.text;
+    const sessionForReply =
+      pendingAttachments.length > 0 && !parsedCommand
+        ? this.options.database.saveSession({
+            id: activeSession.id,
+            wechatAccountId: activeSession.wechatAccountId,
+            contactId: activeSession.contactId,
+            role: route.role,
+            status: activeSession.status,
+            summaryText: activeSession.summaryText,
+            memoryJson: stringifySessionMemory({
+              ...sessionMemory,
+              pendingInboundAttachments: [],
+            }),
+            contextToken: activeSession.contextToken,
+            lastActiveAt: activeSession.lastActiveAt,
+          })
+        : activeSession;
+
     let rawReply: string;
 
     if (parsedCommand) {
@@ -853,12 +1215,12 @@ export class WechatWorker {
                 config: this.options.config,
                 client,
                 database: this.options.database,
-                session: activeSession,
+                session: sessionForReply,
                 role: route.role,
               })
             : buildCommandReply({
                 command: parsedCommand,
-                session: activeSession,
+                session: sessionForReply,
                 database: this.options.database,
                 role: route.role,
                 account,
@@ -888,8 +1250,8 @@ export class WechatWorker {
               backend: this.codexBackends[route.role],
               database: this.options.database,
               role: route.role,
-              session: activeSession,
-              userText: inbound.text,
+              session: sessionForReply,
+              userText: userTextForCodex,
               persistentContext:
                 this.options.config.codex[route.role].backend === "acp",
             }),
@@ -899,7 +1261,7 @@ export class WechatWorker {
           config: this.options.config,
           client,
           database: this.options.database,
-          session: activeSession,
+          session: sessionForReply,
           role: route.role,
         });
       } catch (error) {
@@ -939,7 +1301,7 @@ export class WechatWorker {
 
     this.options.database.appendMessage({
       id: buildMessageId("outbound"),
-      sessionId: activeSession.id,
+      sessionId: sessionForReply.id,
       direction: "outbound",
       messageType: "text",
       textContent: replyText,

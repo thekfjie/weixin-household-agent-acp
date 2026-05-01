@@ -38,7 +38,8 @@
 - 已做：family 默认不能直接触发服务器文件发送。
 - 已做：admin 链路支持 `[[send_file path="..." caption="..."]]` 结构化动作标记，让模型能触发文件发送。
 - 已做：默认创建 `inbox/office/outbox` 三个受控办公文件目录，并加入可发送目录。
-- 后续优先：补 iLink 入站文件下载/解密，把 family 发来的 docx/pdf/xlsx/pptx 保存到 `inbox`。
+- 已做：补 iLink 入站文件/图片下载解密，把 family 发来的 docx/pdf/xlsx/pptx/图片保存到 `inbox`。
+- 已做：只发附件不发说明时先等待下一条文字，不立刻让 AI 猜需求。
 - 后续优先：只允许 family 办公技能读写当前会话对应的受控文件，并把 `outbox` 成品发回原微信会话。
 - 后续可选：图片、视频、语音的专门媒体链路和缩略图处理。
 

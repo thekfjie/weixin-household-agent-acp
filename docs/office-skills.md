@@ -14,7 +14,7 @@ flowchart TD
   F --> G["微信文件发送链路发回 family"]
 ```
 
-当前已经完成的是 `outbox` 到微信的发送链路，以及 `inbox/office/outbox` 三个受控目录。尚未完成的是 iLink 入站文件下载/解密，所以现在收到微信文件时只能看到文件名、大小和媒体元信息，不能直接编辑原文件内容。
+当前已经完成的是 `outbox` 到微信的发送链路、`inbox/office/outbox` 三个受控目录，以及文件/图片入站下载解密。用户只发附件时不会立刻进入 AI 回复；服务会先保存附件并提醒用户再发一句需求，下一条文字会带上待处理附件一起交给 Codex。
 
 ## 目录约定
 
@@ -67,8 +67,8 @@ sudo systemctl restart weixin-household-agent-acp
 
 ## 后续实现点
 
-- 补齐 iLink 入站文件下载接口。
-- 根据 `file_item.aes_key`、`encrypt_query_param`、`md5`、`len` 校验和解密。
-- 下载成功后在 SQLite `attachments` 中记录本地路径。
+- 已完成：iLink 入站文件/图片下载接口。
+- 已完成：根据 `media.aes_key`、`image_item.aeskey`、`encrypt_query_param`、`md5`、`len` 校验和解密。
+- 已完成：下载成功后在 SQLite `attachments` 中记录本地路径。
 - family 触发办公技能处理时，只允许读写该会话自己的 `inbox/office/outbox` 文件。
 - 处理完成后调用现有文件发送链路，把 `outbox` 成品发回原微信会话。

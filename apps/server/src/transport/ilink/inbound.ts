@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import {
+  ILinkCdnMedia,
   ILinkMessage,
   ILinkMessageItem,
   ILinkMessageItemType,
@@ -10,9 +11,20 @@ export interface NormalizedInboundWechatMessage {
   wechatAccountId: string;
   contactId: string;
   text: string;
+  mediaSummary: string;
+  attachments: NormalizedInboundAttachment[];
   contextToken: string;
   receivedAt: string;
   sourceMessageId: string;
+}
+
+export interface NormalizedInboundAttachment {
+  kind: "image" | "file";
+  fileName: string;
+  sizeBytes?: number;
+  md5?: string;
+  media?: ILinkCdnMedia;
+  aesKeyOverride?: string;
 }
 
 function buildFallbackMessageId(input: string): string {
@@ -77,6 +89,44 @@ function summarizeMessageItem(item: ILinkMessageItem): string {
   }
 }
 
+function normalizeInboundAttachment(
+  item: ILinkMessageItem,
+): NormalizedInboundAttachment | undefined {
+  switch (item.type) {
+    case ILinkMessageItemType.IMAGE:
+      return {
+        kind: "image",
+        fileName: "image.jpg",
+        ...(item.image_item?.mid_size
+          ? { sizeBytes: item.image_item.mid_size }
+          : {}),
+        ...(item.image_item?.media ?? item.image_item?.thumb_media
+          ? { media: item.image_item.media ?? item.image_item.thumb_media }
+          : {}),
+        ...(item.image_item?.aeskey
+          ? { aesKeyOverride: item.image_item.aeskey }
+          : {}),
+      };
+    case ILinkMessageItemType.FILE: {
+      const fileName = item.file_item?.file_name?.trim() || "未命名文件";
+      const parsedSize = item.file_item?.len
+        ? Number.parseInt(item.file_item.len, 10)
+        : undefined;
+      return {
+        kind: "file",
+        fileName,
+        ...(Number.isFinite(parsedSize) && parsedSize !== undefined
+          ? { sizeBytes: parsedSize }
+          : {}),
+        ...(item.file_item?.md5 ? { md5: item.file_item.md5 } : {}),
+        ...(item.file_item?.media ? { media: item.file_item.media } : {}),
+      };
+    }
+    default:
+      return undefined;
+  }
+}
+
 export function normalizeInboundWechatMessages(params: {
   wechatAccountId: string;
   messages: ILinkMessage[];
@@ -96,13 +146,24 @@ export function normalizeInboundWechatMessages(params: {
       continue;
     }
 
-    const text = (message.item_list ?? [])
+    const items = message.item_list ?? [];
+    const text = items
+      .filter((item) => item.type === ILinkMessageItemType.TEXT)
       .map(summarizeMessageItem)
       .filter(Boolean)
       .join("\n")
       .trim();
+    const mediaSummary = items
+      .filter((item) => item.type !== ILinkMessageItemType.TEXT)
+      .map(summarizeMessageItem)
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+    const attachments = items
+      .map(normalizeInboundAttachment)
+      .filter((item): item is NormalizedInboundAttachment => Boolean(item));
 
-    if (!text) {
+    if (!text && !mediaSummary) {
       continue;
     }
 
@@ -110,12 +171,14 @@ export function normalizeInboundWechatMessages(params: {
       wechatAccountId: params.wechatAccountId,
       contactId,
       text,
+      mediaSummary,
+      attachments,
       contextToken,
       receivedAt,
       sourceMessageId:
         message.client_id?.trim() ||
         buildFallbackMessageId(
-          `${params.wechatAccountId}:${contactId}:${contextToken}:${text}`,
+          `${params.wechatAccountId}:${contactId}:${contextToken}:${text}:${mediaSummary}`,
         ),
     });
   }
