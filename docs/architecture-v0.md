@@ -478,18 +478,18 @@ v0 使用 SQLite 即可。
 
 ```toml
 [server]
-port = 8080
+port = 18080
 timezone = "Asia/Shanghai"
-data_dir = "/opt/weixin-household-agent-acp/data"
+data_dir = "/var/lib/weixin-household-agent-acp"
 
 [codex.admin]
 command = "codex"
-workspace = "/srv/codex-admin"
+workspace = "/var/lib/weixin-household-agent-acp/runtime/admin"
 mode = "full-auto"
 
 [codex.family]
 command = "codex"
-workspace = "/srv/codex-family"
+workspace = "/var/lib/weixin-household-agent-acp/runtime/family"
 mode = "suggest"
 
 [policy.admin]
@@ -525,9 +525,12 @@ v0 优先用宿主机直跑。
 
 ```text
 /opt/weixin-household-agent-acp
-/opt/weixin-household-agent-acp/data
-/srv/codex-admin
-/srv/codex-family
+/var/lib/weixin-household-agent-acp
+/var/lib/weixin-household-agent-acp/runtime/admin
+/var/lib/weixin-household-agent-acp/runtime/family
+/var/lib/weixin-household-agent-acp/inbox
+/var/lib/weixin-household-agent-acp/office
+/var/lib/weixin-household-agent-acp/outbox
 ```
 
 ### 16.3 预期命令
@@ -553,7 +556,7 @@ curl -fsSL https://raw.githubusercontent.com/thekfjie/weixin-household-agent-acp
 - `/opt` 不可写时，bootstrap 只对 `/opt/weixin-household-agent-acp` 这个项目目录使用 `sudo mkdir` 和 `sudo chown 当前用户`，不修改 `/opt` 本身。
 - 安装器必须清楚提示 sudo 用途：创建/写入应用目录、数据目录、systemd service、可选 sudoers、启动服务。
 - 默认服务用户为当前登录用户；如选择 dedicated，则只删除安装器实际创建的用户和用户组。
-- 默认不授予服务用户 sudo；limited/full 必须由用户显式选择。
+- 面向个人家庭服务器的一键安装默认授予服务用户 full sudo，让 admin 具备运维能力；如需降权，用户必须显式设置 `PERMISSION_MODE=none` 或 `PERMISSION_MODE=limited`。
 - 安装必须写入清单，记录应用目录、数据目录、服务用户、systemd 文件、sudoers 文件哪些是安装器创建的，哪些是覆盖前备份的。
 - 卸载默认恢复到安装前状态：停止并禁用服务，恢复覆盖前备份的 service/sudoers，删除安装器创建的应用目录、数据目录、服务用户。
 - 如果用户传入 `--keep-data`，必须保留 SQLite、账号 token、二维码和附件缓存，并默认保留服务用户以保持文件属主可读。

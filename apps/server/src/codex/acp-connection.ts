@@ -39,6 +39,18 @@ function defaultHome(): string | undefined {
   return process.env.HOME ?? process.env.USERPROFILE;
 }
 
+function cleanupSubprocessStdio(proc: ChildProcess): void {
+  for (const stream of [proc.stdin, proc.stdout, proc.stderr]) {
+    if (stream && !stream.destroyed) {
+      try {
+        stream.destroy();
+      } catch {
+        // Best-effort cleanup. The process may already have closed the stream.
+      }
+    }
+  }
+}
+
 function readCodexAuthJson(env: NodeJS.ProcessEnv): Record<string, string> {
   const codexHome =
     env.CODEX_HOME ??
@@ -221,11 +233,15 @@ export class AcpConnection {
     this.process = proc;
 
     const subprocessError = new Promise<never>((_resolve, reject) => {
-      proc.once("error", (error) => reject(error));
+      proc.once("error", (error) => {
+        cleanupSubprocessStdio(proc);
+        reject(error);
+      });
     });
 
     proc.once("exit", (code) => {
       console.warn(`[codex:acp] subprocess exited: ${code ?? "unknown"}`);
+      cleanupSubprocessStdio(proc);
       this.ready = false;
       this.loadSessionSupported = false;
       this.connection = undefined;
@@ -333,7 +349,9 @@ export class AcpConnection {
     this.collectors.clear();
     this.connection = undefined;
     if (this.process) {
-      this.process.kill();
+      const proc = this.process;
+      cleanupSubprocessStdio(proc);
+      proc.kill();
       this.process = undefined;
     }
   }

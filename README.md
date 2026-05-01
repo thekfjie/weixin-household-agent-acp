@@ -32,6 +32,20 @@ HOME=/home/ubuntu
 
 不要用 `/usr/local/bin/codex` 这种“表面是 ubuntu，实际 sudo 到 wxbot”的跨用户 wrapper。CLI 和 ACP 必须看到同一个真实用户和同一套 `~/.codex`。
 
+目录边界：
+
+```text
+/opt/weixin-household-agent-acp          项目代码、脚本、dist、node_modules
+/var/lib/weixin-household-agent-acp      SQLite、账号、会话、附件、办公文件
+```
+
+不建议把运行数据直接放进 `/opt` 项目目录。这样重装/更新代码时更干净，卸载时也能明确选择“删除程序但保留数据”。如果你想看起来直观，可以在项目目录加一个软链接：
+
+```bash
+cd /opt/weixin-household-agent-acp
+ln -s /var/lib/weixin-household-agent-acp data-live
+```
+
 ### 2. Codex 登录
 
 官方登录模式：
