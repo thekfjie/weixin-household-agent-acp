@@ -5,6 +5,7 @@ const COMMANDS: readonly BuiltInCommand[] = [
   "/reset",
   "/last",
   "/yesterday",
+  "/memory",
   "/mode",
   "/summary",
   "/time",

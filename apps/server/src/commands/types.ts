@@ -3,6 +3,7 @@ export type BuiltInCommand =
   | "/reset"
   | "/last"
   | "/yesterday"
+  | "/memory"
   | "/mode"
   | "/summary"
   | "/time"

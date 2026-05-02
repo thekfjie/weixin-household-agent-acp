@@ -173,6 +173,8 @@ function formatSessionSnapshot(session: SessionRecord): string {
   ];
   if (session.summaryText.trim()) {
     parts.push(`summary=${session.summaryText.trim()}`);
+  } else {
+    parts.push("summary=(无)");
   }
   return parts.join("\n");
 }
@@ -409,6 +411,7 @@ function buildCommandReply(params: {
             "/time 查看北京时间",
             "/whoami 查看当前账号角色",
             "/mode 查看或切换当前会话模式",
+            "/memory 查看当前会话 memory",
             "/last 查看上一段对话",
             "/yesterday 查看昨天的上一段对话",
             "/sessions 查看最近会话",
@@ -424,6 +427,7 @@ function buildCommandReply(params: {
             "/time 查看北京时间",
             "/whoami 查看当前账号角色",
             "/mode 查看当前会话模式",
+            "/memory 查看当前会话 memory",
             "/last 查看上一段对话",
             "/yesterday 查看昨天的上一段对话",
             "/new 或 /reset 重置当前对话上下文",
@@ -487,6 +491,26 @@ function buildCommandReply(params: {
       return params.session.summaryText.trim()
         ? `当前摘要：${params.session.summaryText}`
         : "当前还没有保存摘要。";
+    case "/memory": {
+      const parts = [
+        `turn_count=${params.sessionMemory.turnCount ?? 0}`,
+        `estimated_tokens=${params.sessionMemory.estimatedTokenCount ?? 0}`,
+      ];
+      if (params.sessionMemory.carryoverSourceSessionId) {
+        parts.push(
+          `carryover_session=${params.sessionMemory.carryoverSourceSessionId}`,
+        );
+      }
+      if (params.sessionMemory.carryoverSourceLastActiveAt) {
+        parts.push(
+          `carryover_last=${params.sessionMemory.carryoverSourceLastActiveAt}`,
+        );
+      }
+      if (params.sessionMemory.carryoverSummary?.trim()) {
+        parts.push(`carryover_summary=${params.sessionMemory.carryoverSummary}`);
+      }
+      return `当前 memory：\n${parts.join("\n")}`;
+    }
     case "/last": {
       const previous = findPreviousSession({
         database: params.database,
