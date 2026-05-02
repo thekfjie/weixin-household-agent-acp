@@ -369,6 +369,25 @@ function buildPreviousSessionHint(params: {
   return lines.join("\n");
 }
 
+function buildDayChangeUserNotice(params: {
+  session: SessionRecord;
+  role: UserRole;
+  now: Date;
+}): string | undefined {
+  if (
+    !isNewBeijingCalendarDay({
+      previousAt: params.session.lastActiveAt,
+      now: params.now,
+    })
+  ) {
+    return undefined;
+  }
+
+  return params.role === "family"
+    ? "昨天那段我先收起来了，我们接着聊；要回看上一段可以发 /last 或 /yesterday。"
+    : "已按新的一天开启新对话；如需回看上一段，可用 /last 或 /yesterday。";
+}
+
 function buildCommandReply(params: {
   command: ParsedCommand;
   session: SessionRecord;
@@ -1586,6 +1605,15 @@ export class WechatWorker {
           lastActiveAt: inbound.receivedAt,
         })
       : session;
+    const dayChangeNotice =
+      rotateDecision.shouldRotate &&
+      rotateDecision.reason === "crossed into a new Beijing calendar day"
+        ? buildDayChangeUserNotice({
+            session,
+            role: route.role,
+            now: new Date(),
+          })
+        : undefined;
 
     const activeSession = this.options.database.saveSession({
       id: sessionForTurn.id,
@@ -1798,14 +1826,15 @@ export class WechatWorker {
       route.role === "family"
         ? filterFamilyOutput(rawReply, this.options.config.familyPolicy)
         : rawReply;
+    const finalReplyText = [dayChangeNotice, replyText].filter(Boolean).join("\n");
 
-    if (!replyText.trim()) {
+    if (!finalReplyText.trim()) {
       return;
     }
 
     let lastClientId = "";
     const chunks = splitReplyText(
-      replyText,
+      finalReplyText,
       this.options.config.wechat.replyChunkChars,
     );
     for (const [index, chunk] of chunks.entries()) {
@@ -1825,7 +1854,7 @@ export class WechatWorker {
       sessionId: sessionForReply.id,
       direction: "outbound",
       messageType: "text",
-      textContent: replyText,
+      textContent: finalReplyText,
       createdAt: new Date().toISOString(),
       sourceMessageId: lastClientId || inbound.sourceMessageId,
     });
@@ -1847,7 +1876,7 @@ export class WechatWorker {
             sessionMemory.estimatedTokenCount ?? 0,
           ) +
           estimateTextTokens(userTextForCodex) +
-          estimateTextTokens(replyText),
+          estimateTextTokens(finalReplyText),
       }),
       contextToken: sessionForReply.contextToken,
       lastActiveAt: new Date().toISOString(),
