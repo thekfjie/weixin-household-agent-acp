@@ -329,7 +329,7 @@ function buildCrossDayNotice(params: {
     return undefined;
   }
 
-  return "前置信息：这是新的一天里的新对话，如有需要可参考上一段对话摘要。";
+  return "前置信息：这条消息属于新的一天里的新对话；如当前语境需要，再自然参考上一段对话摘要，不要生硬提起。";
 }
 
 function shouldAttachPreviousSessionHint(text: string): boolean {
@@ -1695,10 +1695,6 @@ export class WechatWorker {
             summaryText: activeSession.summaryText,
             memoryJson: stringifySessionMemory({
               ...sessionMemory,
-              turnCount: (sessionMemory.turnCount ?? 0) + 1,
-              estimatedTokenCount:
-                (sessionMemory.estimatedTokenCount ?? 0) +
-                estimateTextTokens(userTextForCodex),
               pendingInboundAttachments: [],
             }),
             contextToken: activeSession.contextToken,
