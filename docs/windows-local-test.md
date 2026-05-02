@@ -2,7 +2,7 @@
 
 这份说明面向当前开发机：
 
-- 仓库目录：`E:\program\weixin-household-agent-acp`
+- 仓库目录：`E:\program\weixin-household-gateway`
 - 目标：先在 Windows 上完成本地联调，再迁移到 Linux 服务器
 
 ## 推荐入口
