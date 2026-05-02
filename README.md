@@ -20,6 +20,15 @@ curl -fsSL https://raw.githubusercontent.com/thekfjie/weixin-household-agent-acp
 
 脚本会拉代码到 `/opt/weixin-household-gateway`，先检测系统环境；缺少 `git`、`sudo`、`Node.js 22 LTS` 等基础依赖时会询问是否补装。随后安装依赖、构建、写入 `.env` 和 systemd 服务。首次没有微信账号时会停在终端二维码，扫码确认后继续启动。
 
+默认是交互安装，不会一上来就一路自动跑完。  
+如果你明确想要无交互默认值安装，才显式加：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/thekfjie/weixin-household-agent-acp/main/infra/scripts/linux/bootstrap.sh | \
+BOOTSTRAP_YES=1 \
+bash
+```
+
 默认值按“你自己的家庭服务器”设计：
 
 - Codex 后端默认走 `ACP`，不是一次性 `codex exec`。
@@ -56,6 +65,13 @@ ln -s /var/lib/weixin-household-gateway data-live
 ### 2. Codex 准备
 
 默认推荐：`ACP + 第三方 API key`
+
+安装器会在交互过程中默认先让你选择 `api_key` 模式，并直接提示输入：
+
+- `CODEX_CLI_BASE_URL`
+- `CODEX_CLI_API_KEY`
+
+如果你当场不想填，它会允许你改走 `login` 模式，不会因为没填就直接退出。
 
 推荐先准备 `.env`：
 

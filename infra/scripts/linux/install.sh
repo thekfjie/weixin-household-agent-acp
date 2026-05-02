@@ -129,6 +129,36 @@ prompt_yes_no() {
   esac
 }
 
+prompt_required() {
+  local label="$1"
+  local current_value="$2"
+  local allow_empty_choice_label="${3:-}"
+  local input
+
+  while true; do
+    if [[ -n "${current_value}" ]]; then
+      read -r -p "${label} [${current_value}]: " input
+      input="${input:-$current_value}"
+    else
+      read -r -p "${label}: " input
+    fi
+
+    if [[ -n "${input}" ]]; then
+      printf '%s\n' "${input}"
+      return
+    fi
+
+    if [[ -n "${allow_empty_choice_label}" ]]; then
+      if prompt_yes_no "${allow_empty_choice_label}" "n"; then
+        printf '%s\n' ""
+        return
+      fi
+    fi
+
+    echo "这个值不能为空，请重新输入。"
+  done
+}
+
 detect_package_manager() {
   if command -v apt-get >/dev/null 2>&1; then
     printf '%s\n' "apt"
@@ -522,8 +552,25 @@ configure_interactively() {
   validate_choice "${CODEX_CLI_AUTH_MODE}" api_key login
 
   if [[ "${CODEX_CLI_AUTH_MODE}" == "api_key" ]]; then
-    CODEX_CLI_BASE_URL="$(prompt_default "第三方兼容 API Base URL" "${CODEX_CLI_BASE_URL}")"
-    CODEX_CLI_API_KEY="$(prompt_default "第三方兼容 API Key" "${CODEX_CLI_API_KEY}")"
+    CODEX_CLI_BASE_URL="$(
+      prompt_required \
+        "第三方兼容 API Base URL" \
+        "${CODEX_CLI_BASE_URL}" \
+        "不填 Base URL，是否改用 login 模式？"
+    )"
+    if [[ -z "${CODEX_CLI_BASE_URL}" ]]; then
+      CODEX_CLI_AUTH_MODE="login"
+    else
+      CODEX_CLI_API_KEY="$(
+        prompt_required \
+          "第三方兼容 API Key" \
+          "${CODEX_CLI_API_KEY}" \
+          "不填 API Key，是否改用 login 模式？"
+      )"
+      if [[ -z "${CODEX_CLI_API_KEY}" ]]; then
+        CODEX_CLI_AUTH_MODE="login"
+      fi
+    fi
   fi
   CODEX_CLI_MODEL="$(prompt_default "Codex 对话模型" "${CODEX_CLI_MODEL}")"
   CODEX_CLI_REVIEW_MODEL="$(prompt_default "Codex 压缩/回顾模型" "${CODEX_CLI_REVIEW_MODEL}")"
@@ -992,8 +1039,11 @@ configure_codex_cli() {
   pushd "${APP_DIR}" >/dev/null
   if [[ "${CODEX_CLI_AUTH_MODE}" == "api_key" ]]; then
     if [[ -z "${CODEX_CLI_BASE_URL}" || -z "${CODEX_CLI_API_KEY}" ]]; then
-      echo "已选择 api_key 模式，但未提供完整的 CODEX_CLI_BASE_URL / CODEX_CLI_API_KEY。" >&2
-      exit 1
+      echo "api_key 模式缺少完整的 CODEX_CLI_BASE_URL / CODEX_CLI_API_KEY，自动切回 login 模式。"
+      CODEX_CLI_AUTH_MODE="login"
+      popd >/dev/null
+      configure_codex_cli
+      return
     fi
     run_node_as_service_user "dist/apps/server/configure-codex.js" --apply
   else

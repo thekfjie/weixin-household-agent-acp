@@ -12,6 +12,7 @@ USER_MODE="${USER_MODE:-current}"
 PERMISSION_MODE="${PERMISSION_MODE:-full}"
 LOGIN_ROLE="${LOGIN_ROLE:-admin}"
 APP_DIR_CREATED_BY_BOOTSTRAP=0
+BOOTSTRAP_YES="${BOOTSTRAP_YES:-0}"
 
 usage() {
   cat <<EOF
@@ -27,9 +28,11 @@ usage() {
   USER_MODE=${USER_MODE}
   PERMISSION_MODE=${PERMISSION_MODE}
   LOGIN_ROLE=${LOGIN_ROLE}
+  BOOTSTRAP_YES=${BOOTSTRAP_YES}
 
 示例：
   curl -fsSL https://raw.githubusercontent.com/thekfjie/weixin-household-agent-acp/main/infra/scripts/linux/bootstrap.sh | LOGIN_ROLE=admin PORT=18080 bash
+  curl -fsSL https://raw.githubusercontent.com/thekfjie/weixin-household-agent-acp/main/infra/scripts/linux/bootstrap.sh | BOOTSTRAP_YES=1 LOGIN_ROLE=admin bash
 EOF
 }
 
@@ -87,7 +90,6 @@ fi
 cd "${APP_DIR}"
 
 install_args=(
-  --yes \
   --app-dir "${APP_DIR}" \
   --data-dir "${DATA_DIR}" \
   --port "${PORT}" \
@@ -96,6 +98,10 @@ install_args=(
   --permission-mode "${PERMISSION_MODE}" \
   --login-role "${LOGIN_ROLE}"
 )
+
+if [[ "${BOOTSTRAP_YES}" == "1" ]]; then
+  install_args=(--yes "${install_args[@]}")
+fi
 
 if [[ "${APP_DIR_CREATED_BY_BOOTSTRAP}" -eq 1 ]]; then
   install_args+=(--app-dir-created)
