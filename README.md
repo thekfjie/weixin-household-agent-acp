@@ -235,12 +235,14 @@ CODEX_FAMILY_HOME=/home/ubuntu/.codex-family
 
 ## 用户组提示词
 
-核心提示词在 `apps/server/src/sessions/prompt-context.ts` 和 `apps/server/src/transport/ilink/worker.ts`。
+最新提示词整理文档见：[提示词参考](docs/prompts.md)。
+
+核心源码在 `apps/server/src/sessions/prompt-context.ts` 和 `apps/server/src/transport/ilink/worker.ts`。
 
 提示词注入策略：
 
 - CLI 后端是一次性 `codex exec`，每条消息都会带完整角色说明。
-- ACP 后端有持续 session，只在新微信会话或 `/new`、`/reset` 后首条消息注入角色说明；后续只带轻量时间锚点、摘要、最近对话和用户最新消息。
+- ACP 后端有持续 session，只在新微信会话或 `/new`、`/reset` 后首条消息注入完整 bootstrap prompt；后续轮次只带轻量时间锚点、路由说明和当前消息，不再每次重塞整段最近历史。
 
 `admin`：
 
@@ -277,6 +279,7 @@ CODEX_FAMILY_HOME=/home/ubuntu/.codex-family
 ## 更多文档
 
 - [产品目标核对](docs/product-checklist.md)
+- [提示词参考](docs/prompts.md)
 - [办公技能和文件工作区](docs/office-skills.md)
 - [后续计划](docs/roadmap.md)
 - [架构草案](docs/architecture-v0.md)

@@ -89,6 +89,7 @@ export class AcpCodexBackend implements CodexBackend {
     const session = await this.getOrCreateSession(request.conversationId, conn);
     const collector = new AcpResponseCollector({
       ...(request.onProgress ? { onProgress: request.onProgress } : {}),
+      ...(request.responseMode ? { responseMode: request.responseMode } : {}),
     });
     const promptText =
       session.isFresh && request.bootstrapPrompt

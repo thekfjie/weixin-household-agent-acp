@@ -5,11 +5,14 @@ export interface CodexProgressEvent {
   phase: "thinking" | "responding";
 }
 
+export type CodexResponseMode = "full_text" | "final_message_run";
+
 export interface CodexBackendRequest {
   conversationId: string;
   prompt: string;
   bootstrapPrompt?: string;
   role: UserRole;
+  responseMode?: CodexResponseMode;
   onProgress?: (event: CodexProgressEvent) => void;
 }
 

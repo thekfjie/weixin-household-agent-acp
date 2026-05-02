@@ -6,6 +6,7 @@ import { ParsedCommand, parseBuiltInCommand } from "../../commands/index.js";
 import {
   CodexBackend,
   CodexProgressEvent,
+  CodexResponseMode,
   createCodexBackend,
 } from "../../codex/index.js";
 import {
@@ -446,6 +447,76 @@ function buildInboundAttachmentPath(params: {
   );
 }
 
+function buildSessionWorkspacePaths(params: {
+  config: AppConfig;
+  sessionId: string;
+}): {
+  inboxDir: string;
+  officeDir: string;
+  outboxDir: string;
+} {
+  return {
+    inboxDir: path.join(
+      params.config.server.dataDir,
+      "inbox",
+      params.sessionId,
+    ),
+    officeDir: path.join(
+      params.config.server.dataDir,
+      "office",
+      params.sessionId,
+    ),
+    outboxDir: path.join(
+      params.config.server.dataDir,
+      "outbox",
+      params.sessionId,
+    ),
+  };
+}
+
+function ensureSessionWorkspaceDirs(params: {
+  config: AppConfig;
+  sessionId: string;
+}): void {
+  const paths = buildSessionWorkspacePaths(params);
+  for (const directory of Object.values(paths)) {
+    fs.mkdirSync(directory, { recursive: true });
+  }
+}
+
+function buildSessionWorkspacePromptBlock(params: {
+  config: AppConfig;
+  role: UserRole;
+  session: SessionRecord;
+}): string | undefined {
+  if (params.role !== "family") {
+    return undefined;
+  }
+
+  const paths = buildSessionWorkspacePaths({
+    config: params.config,
+    sessionId: params.session.id,
+  });
+
+  return [
+    "当前会话受控工作区：",
+    `- inbox: ${paths.inboxDir}`,
+    `- office: ${paths.officeDir}`,
+    `- outbox: ${paths.outboxDir}`,
+    "优先只读写这个会话自己的工作区，不要访问其他会话目录。",
+    "如果生成可发回用户的成品文件，请写入当前会话的 outbox 目录。",
+    "如需把当前会话 outbox 里的文件发回微信，只输出动作标记：[[send_file path=\"/absolute/path\" caption=\"可选说明\"]]。不要解释这个标记。",
+  ].join("\n");
+}
+
+function isInsideDirectory(filePath: string, directory: string): boolean {
+  const relative = path.relative(directory, filePath);
+  return (
+    relative === "" ||
+    (!!relative && !relative.startsWith("..") && !path.isAbsolute(relative))
+  );
+}
+
 function buildAttachmentPromptBlock(
   attachments: PendingInboundAttachment[],
 ): string {
@@ -771,6 +842,7 @@ async function downloadInboundAttachments(params: {
 }
 
 function buildCodexBootstrapPrompt(params: {
+  config: AppConfig;
   database: AppDatabase;
   role: UserRole;
   session: SessionRecord;
@@ -816,12 +888,18 @@ function buildCodexBootstrapPrompt(params: {
     params.role === "admin"
       ? "只输出最终要发回微信的内容。"
       : "只输出最终要发给家人的自然回复，不输出分析过程。";
+  const workspaceInstruction = buildSessionWorkspacePromptBlock({
+    config: params.config,
+    role: params.role,
+    session: params.session,
+  });
 
   return [
     promptContext.currentTimeText,
     promptContext.assistantInstruction,
     promptContext.summaryBlock ? `\n会话摘要：\n${promptContext.summaryBlock}` : "",
     `\n${roleInstruction}`,
+    workspaceInstruction ? `\n${workspaceInstruction}` : "",
     "\n最近对话：",
     recentMessages.length > 0 ? recentMessages.join("\n") : "（暂无）",
     "\n用户最新消息：",
@@ -833,7 +911,9 @@ function buildCodexBootstrapPrompt(params: {
 }
 
 function buildCodexIncrementalPrompt(params: {
+  config: AppConfig;
   role: UserRole;
+  session: SessionRecord;
   userText: string;
 }): string {
   const promptContext = buildPromptContext({
@@ -848,10 +928,16 @@ function buildCodexIncrementalPrompt(params: {
     params.role === "admin"
       ? "只输出最终要发回微信的内容。"
       : "只输出最终要发给家人的自然回复，不输出分析过程。";
+  const workspaceInstruction = buildSessionWorkspacePromptBlock({
+    config: params.config,
+    role: params.role,
+    session: params.session,
+  });
 
   return [
     promptContext.currentTimeText,
     continuationInstruction,
+    workspaceInstruction ? `\n${workspaceInstruction}` : "",
     "\n用户最新消息：",
     params.userText,
     `\n${finalInstruction}`,
@@ -862,19 +948,24 @@ function buildCodexIncrementalPrompt(params: {
 
 async function buildCodexReply(params: {
   backend: CodexBackend;
+  config: AppConfig;
   database: AppDatabase;
   role: UserRole;
   session: SessionRecord;
   userText: string;
   persistentContext: boolean;
+  responseMode?: CodexResponseMode;
   onProgress?: (event: CodexProgressEvent) => void;
 }): Promise<string> {
   const prompt = params.persistentContext
     ? buildCodexIncrementalPrompt({
+        config: params.config,
         role: params.role,
+        session: params.session,
         userText: params.userText,
       })
     : buildCodexBootstrapPrompt({
+        config: params.config,
         database: params.database,
         role: params.role,
         session: params.session,
@@ -882,6 +973,7 @@ async function buildCodexReply(params: {
       });
   const bootstrapPrompt = params.persistentContext
     ? buildCodexBootstrapPrompt({
+        config: params.config,
         database: params.database,
         role: params.role,
         session: params.session,
@@ -893,6 +985,7 @@ async function buildCodexReply(params: {
     prompt,
     ...(bootstrapPrompt ? { bootstrapPrompt } : {}),
     role: params.role,
+    ...(params.responseMode ? { responseMode: params.responseMode } : {}),
     ...(params.onProgress ? { onProgress: params.onProgress } : {}),
   });
 
@@ -937,12 +1030,25 @@ async function handleAssistantFileActions(params: {
   session: SessionRecord;
   role: UserRole;
 }): Promise<string> {
-  if (params.role !== "admin") {
+  const action = parseAssistantFileAction(params.rawReply);
+  if (!action) {
     return params.rawReply;
   }
 
-  const action = parseAssistantFileAction(params.rawReply);
-  if (!action) {
+  if (params.role === "family") {
+    const { outboxDir } = buildSessionWorkspacePaths({
+      config: params.config,
+      sessionId: params.session.id,
+    });
+    const requestedPath = path.resolve(action.command.args[0] ?? "");
+    if (
+      !requestedPath ||
+      !fs.existsSync(requestedPath) ||
+      !isInsideDirectory(requestedPath, outboxDir)
+    ) {
+      return action.cleanedText;
+    }
+  } else if (params.role !== "admin") {
     return params.rawReply;
   }
 
@@ -1198,6 +1304,10 @@ export class WechatWorker {
       contextToken: inbound.contextToken,
       lastActiveAt: inbound.receivedAt,
     });
+    ensureSessionWorkspaceDirs({
+      config: this.options.config,
+      sessionId: activeSession.id,
+    });
     const sessionMemory = parseSessionMemory(activeSession.memoryJson);
     const downloadedAttachments =
       inbound.attachments.length > 0
@@ -1352,12 +1462,18 @@ export class WechatWorker {
           work: () =>
             buildCodexReply({
               backend: this.codexBackends[route.role],
+              config: this.options.config,
               database: this.options.database,
               role: route.role,
               session: sessionForReply,
               userText: userTextForCodex,
               persistentContext:
                 this.options.config.codex[route.role].backend === "acp",
+              responseMode:
+                route.role === "family" &&
+                this.options.config.codex[route.role].backend === "acp"
+                  ? "final_message_run"
+                  : "full_text",
               onProgress: (event) => {
                 progress.phase = event.phase;
               },
