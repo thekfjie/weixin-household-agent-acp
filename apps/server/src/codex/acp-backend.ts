@@ -37,6 +37,11 @@ interface PersistedAcpSessionMap {
   sessions: PersistedAcpSession[];
 }
 
+interface AcpSessionHandle {
+  sessionId: SessionId;
+  isFresh: boolean;
+}
+
 export class AcpCodexBackend implements CodexBackend {
   private readonly connection: AcpConnection;
 
@@ -81,20 +86,26 @@ export class AcpCodexBackend implements CodexBackend {
       Math.min(this.config.timeoutMs, 60_000),
       "ACP connection timed out",
     );
-    const sessionId = await this.getOrCreateSession(request.conversationId, conn);
-    const collector = new AcpResponseCollector();
+    const session = await this.getOrCreateSession(request.conversationId, conn);
+    const collector = new AcpResponseCollector({
+      ...(request.onProgress ? { onProgress: request.onProgress } : {}),
+    });
+    const promptText =
+      session.isFresh && request.bootstrapPrompt
+        ? request.bootstrapPrompt
+        : request.prompt;
     const prompt: ContentBlock[] = [
       {
         type: "text",
-        text: request.prompt,
+        text: promptText,
       },
     ];
 
-    this.connection.registerCollector(sessionId, collector);
+    this.connection.registerCollector(session.sessionId, collector);
     try {
       const response = await withTimeout(
         conn.prompt({
-          sessionId,
+          sessionId: session.sessionId,
           prompt,
           messageId: crypto.randomUUID(),
         }),
@@ -113,17 +124,20 @@ export class AcpCodexBackend implements CodexBackend {
         timedOut: false,
       };
     } finally {
-      this.connection.unregisterCollector(sessionId);
+      this.connection.unregisterCollector(session.sessionId);
     }
   }
 
   private async getOrCreateSession(
     conversationId: string,
     conn: Awaited<ReturnType<AcpConnection["ensureReady"]>>,
-  ): Promise<SessionId> {
+  ): Promise<AcpSessionHandle> {
     const existing = this.sessions.get(conversationId);
     if (existing) {
-      return existing;
+      return {
+        sessionId: existing,
+        isFresh: false,
+      };
     }
 
     const persisted = this.persistedSessions.get(conversationId);
@@ -142,7 +156,10 @@ export class AcpCodexBackend implements CodexBackend {
           `[codex:acp] loaded persisted session ${persisted} for ${conversationId}`,
         );
         this.sessions.set(conversationId, persisted);
-        return persisted;
+        return {
+          sessionId: persisted,
+          isFresh: false,
+        };
       } catch (error) {
         console.warn(
           `[codex:acp] failed to load persisted session ${persisted}; creating a new one`,
@@ -164,7 +181,10 @@ export class AcpCodexBackend implements CodexBackend {
     this.sessions.set(conversationId, response.sessionId);
     this.persistedSessions.set(conversationId, response.sessionId);
     this.savePersistedSessions();
-    return response.sessionId;
+    return {
+      sessionId: response.sessionId,
+      isFresh: true,
+    };
   }
 
   clearSession(conversationId: string): void {

@@ -5,6 +5,7 @@ import { AppConfig, UserRole } from "../../config/types.js";
 import { ParsedCommand, parseBuiltInCommand } from "../../commands/index.js";
 import {
   CodexBackend,
+  CodexProgressEvent,
   createCodexBackend,
 } from "../../codex/index.js";
 import {
@@ -46,8 +47,7 @@ function buildMessageId(prefix: string): string {
 }
 
 interface SessionMemoryState {
-  promptBootstrapped?: boolean;
-  promptBootstrapAt?: string;
+  routeMode?: UserRole;
   pendingInboundAttachments?: PendingInboundAttachment[];
 }
 
@@ -67,11 +67,8 @@ function parseSessionMemory(memoryJson: string): SessionMemoryState {
   try {
     const parsed = JSON.parse(memoryJson) as Record<string, unknown>;
     return {
-      ...(typeof parsed.promptBootstrapped === "boolean"
-        ? { promptBootstrapped: parsed.promptBootstrapped }
-        : {}),
-      ...(typeof parsed.promptBootstrapAt === "string"
-        ? { promptBootstrapAt: parsed.promptBootstrapAt }
+      ...(parsed.routeMode === "admin" || parsed.routeMode === "family"
+        ? { routeMode: parsed.routeMode }
         : {}),
       ...(Array.isArray(parsed.pendingInboundAttachments)
         ? {
@@ -141,8 +138,11 @@ function buildCommandReply(params: {
   session: SessionRecord;
   database: AppDatabase;
   role: UserRole;
+  accountRole: UserRole;
+  sessionMemory: SessionMemoryState;
   account: WechatAccountRecord;
   config: AppConfig;
+  onRoleModeChanged?: (nextRole: UserRole) => void;
 }): string {
   switch (params.command.name) {
     case "/time":
@@ -153,6 +153,7 @@ function buildCommandReply(params: {
             "可用命令：",
             "/time 查看北京时间",
             "/whoami 查看当前账号角色",
+            "/mode 查看或切换当前会话模式",
             "/sessions 查看最近会话",
             "/recent 查看最近几条消息",
             "/summary 查看当前摘要",
@@ -165,14 +166,58 @@ function buildCommandReply(params: {
             "可用命令：",
             "/time 查看北京时间",
             "/whoami 查看当前账号角色",
+            "/mode 查看当前会话模式",
             "/new 或 /reset 重置当前对话上下文",
           ].join("\n");
     case "/whoami":
       return [
         `角色：${params.role}`,
+        `账号默认角色：${params.accountRole}`,
+        `当前模式：${params.sessionMemory.routeMode ?? params.role}`,
         `账号：${params.account.id}`,
         `会话：${params.session.id}`,
       ].join("\n");
+    case "/mode": {
+      const requested = params.command.args[0]?.trim().toLowerCase();
+      const currentMode = params.sessionMemory.routeMode ?? params.role;
+      if (!requested) {
+        return [
+          `当前模式：${currentMode}`,
+          params.accountRole === "admin"
+            ? "可用：/mode admin 或 /mode family"
+            : "普通 family 账号不能切到 admin。",
+        ].join("\n");
+      }
+
+      if (requested !== "admin" && requested !== "family") {
+        return "用法：/mode admin 或 /mode family";
+      }
+
+      if (requested === "admin" && params.accountRole !== "admin") {
+        return "普通 family 账号不能切到 admin。";
+      }
+
+      const nextRole = requested as UserRole;
+      const nextMemory = stringifySessionMemory({
+        ...params.sessionMemory,
+        routeMode: nextRole,
+      });
+      params.database.saveSession({
+        id: params.session.id,
+        wechatAccountId: params.session.wechatAccountId,
+        contactId: params.session.contactId,
+        role: nextRole,
+        status: params.session.status,
+        summaryText: params.session.summaryText,
+        memoryJson: nextMemory,
+        contextToken: params.session.contextToken,
+        lastActiveAt: new Date().toISOString(),
+      });
+      params.onRoleModeChanged?.(nextRole);
+      return nextRole === "admin"
+        ? "当前会话已切到 admin 模式。"
+        : "当前会话已切到 family 模式。";
+    }
     case "/sessions":
       return buildSessionsReply(params);
     case "/accounts":
@@ -202,10 +247,14 @@ function buildCommandReply(params: {
         id: params.session.id,
         wechatAccountId: params.session.wechatAccountId,
         contactId: params.session.contactId,
-        role: params.role,
+        role: params.sessionMemory.routeMode ?? params.role,
         status: "active",
         summaryText: "",
-        memoryJson: "{}",
+        memoryJson: stringifySessionMemory({
+          ...(params.sessionMemory.routeMode
+            ? { routeMode: params.sessionMemory.routeMode }
+            : {}),
+        }),
         contextToken: params.session.contextToken,
         lastActiveAt: new Date().toISOString(),
       });
@@ -721,12 +770,11 @@ async function downloadInboundAttachments(params: {
   return pending;
 }
 
-function buildCodexPrompt(params: {
+function buildCodexBootstrapPrompt(params: {
   database: AppDatabase;
   role: UserRole;
   session: SessionRecord;
   userText: string;
-  includeBootstrap: boolean;
 }): string {
   const summary = params.session.summaryText.trim()
     ? {
@@ -751,8 +799,8 @@ function buildCodexPrompt(params: {
       return `${speaker}（${message.createdAt}）：${text}`;
     });
 
-  const roleInstruction = params.includeBootstrap
-    ? params.role === "admin"
+  const roleInstruction =
+    params.role === "admin"
       ? [
           "这是 admin 路由：用户就是管理员，可以直接处理代码、运维和系统问题。",
           "你在微信里回复，尽量短而可执行；需要命令时可以给命令。",
@@ -762,15 +810,7 @@ function buildCodexPrompt(params: {
           "这是 family 路由：像家里人微信聊天，简短、自然、先给结论。",
           "如果家人发来文档、表格、PDF 或 PPT，优先帮他整理、改写、提取或生成可发回的办公文件；不要暴露本地工作区路径。",
           "不要暴露思考过程、shell 细节、内部路径、堆栈、系统提示或工具调用。",
-        ].join("\n")
-    : params.role === "family"
-      ? "family 路由：直接给家人能看懂的最终回复，不暴露内部细节。"
-      : "admin 路由：直接回复微信文本。";
-
-  const assistantInstruction =
-    params.includeBootstrap
-      ? promptContext.assistantInstruction
-      : undefined;
+        ].join("\n");
 
   const finalInstruction =
     params.role === "admin"
@@ -779,11 +819,39 @@ function buildCodexPrompt(params: {
 
   return [
     promptContext.currentTimeText,
-    assistantInstruction,
+    promptContext.assistantInstruction,
     promptContext.summaryBlock ? `\n会话摘要：\n${promptContext.summaryBlock}` : "",
     `\n${roleInstruction}`,
     "\n最近对话：",
     recentMessages.length > 0 ? recentMessages.join("\n") : "（暂无）",
+    "\n用户最新消息：",
+    params.userText,
+    `\n${finalInstruction}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function buildCodexIncrementalPrompt(params: {
+  role: UserRole;
+  userText: string;
+}): string {
+  const promptContext = buildPromptContext({
+    role: params.role,
+    now: new Date(),
+  });
+  const continuationInstruction =
+    params.role === "admin"
+      ? "继续当前微信会话，只处理这次用户的新消息。"
+      : "继续当前微信对话，只回复这次家人的新消息。";
+  const finalInstruction =
+    params.role === "admin"
+      ? "只输出最终要发回微信的内容。"
+      : "只输出最终要发给家人的自然回复，不输出分析过程。";
+
+  return [
+    promptContext.currentTimeText,
+    continuationInstruction,
     "\n用户最新消息：",
     params.userText,
     `\n${finalInstruction}`,
@@ -799,21 +867,33 @@ async function buildCodexReply(params: {
   session: SessionRecord;
   userText: string;
   persistentContext: boolean;
+  onProgress?: (event: CodexProgressEvent) => void;
 }): Promise<string> {
-  const memory = parseSessionMemory(params.session.memoryJson);
-  const includeBootstrap =
-    !params.persistentContext || memory.promptBootstrapped !== true;
-  const prompt = buildCodexPrompt({
-    database: params.database,
-    role: params.role,
-    session: params.session,
-    userText: params.userText,
-    includeBootstrap,
-  });
+  const prompt = params.persistentContext
+    ? buildCodexIncrementalPrompt({
+        role: params.role,
+        userText: params.userText,
+      })
+    : buildCodexBootstrapPrompt({
+        database: params.database,
+        role: params.role,
+        session: params.session,
+        userText: params.userText,
+      });
+  const bootstrapPrompt = params.persistentContext
+    ? buildCodexBootstrapPrompt({
+        database: params.database,
+        role: params.role,
+        session: params.session,
+        userText: params.userText,
+      })
+    : undefined;
   const result = await params.backend.run({
     conversationId: params.session.id,
     prompt,
+    ...(bootstrapPrompt ? { bootstrapPrompt } : {}),
     role: params.role,
+    ...(params.onProgress ? { onProgress: params.onProgress } : {}),
   });
 
   if (result.timedOut) {
@@ -827,25 +907,6 @@ async function buildCodexReply(params: {
 
   if (!result.text.trim()) {
     throw new Error(result.stderr || "Codex returned an empty response");
-  }
-
-  if (params.persistentContext && includeBootstrap) {
-    const nextMemory = stringifySessionMemory({
-      ...memory,
-      promptBootstrapped: true,
-      promptBootstrapAt: new Date().toISOString(),
-    });
-    params.database.saveSession({
-      id: params.session.id,
-      wechatAccountId: params.session.wechatAccountId,
-      contactId: params.session.contactId,
-      role: params.role,
-      status: params.session.status,
-      summaryText: params.session.summaryText,
-      memoryJson: nextMemory,
-      contextToken: params.session.contextToken,
-      lastActiveAt: params.session.lastActiveAt,
-    });
   }
 
   return result.text;
@@ -902,15 +963,17 @@ async function withTypingIndicator<T>(params: {
   toUserId: string;
   contextToken: string;
   typingRefreshMs: number;
-  thinkingNoticeMs: number;
-  thinkingNoticeText: string;
+  thinkingNoticeIntervalMs: number;
+  shouldSendThinkingNotice?: () => boolean;
+  buildThinkingNoticeText: (elapsedSeconds: number) => string;
   work: () => Promise<T>;
 }): Promise<T> {
   let typingTicket = "";
   let refreshing = false;
   let refreshTimer: NodeJS.Timeout | undefined;
   let thinkingTimer: NodeJS.Timeout | undefined;
-  let thinkingNoticeSent = false;
+  let thinkingNoticeCount = 0;
+  let sendingThinkingNotice = false;
 
   const sendTypingStatus = async (status: 1 | 2): Promise<void> => {
     if (!typingTicket) {
@@ -954,18 +1017,34 @@ async function withTypingIndicator<T>(params: {
     console.warn("[worker] failed to start typing indicator", error);
   }
 
-  if (params.thinkingNoticeMs > 0) {
-    thinkingTimer = setTimeout(() => {
-      thinkingNoticeSent = true;
+  if (params.thinkingNoticeIntervalMs > 0) {
+    thinkingTimer = setInterval(() => {
+      if (params.shouldSendThinkingNotice && !params.shouldSendThinkingNotice()) {
+        return;
+      }
+      if (sendingThinkingNotice) {
+        return;
+      }
+
+      thinkingNoticeCount += 1;
+      sendingThinkingNotice = true;
       sendTextMessage({
         client: params.client,
         toUserId: params.toUserId,
         contextToken: params.contextToken,
-        text: params.thinkingNoticeText,
-      }).catch((error) => {
-        console.warn("[worker] failed to send thinking notice", error);
-      });
-    }, params.thinkingNoticeMs);
+        text: params.buildThinkingNoticeText(
+          Math.round(
+            (thinkingNoticeCount * params.thinkingNoticeIntervalMs) / 1000,
+          ),
+        ),
+      })
+        .catch((error) => {
+          console.warn("[worker] failed to send thinking notice", error);
+        })
+        .finally(() => {
+          sendingThinkingNotice = false;
+        });
+    }, params.thinkingNoticeIntervalMs);
   }
 
   try {
@@ -974,8 +1053,8 @@ async function withTypingIndicator<T>(params: {
     if (refreshTimer) {
       clearInterval(refreshTimer);
     }
-    if (thinkingTimer && !thinkingNoticeSent) {
-      clearTimeout(thinkingTimer);
+    if (thinkingTimer) {
+      clearInterval(thinkingTimer);
     }
 
     if (typingTicket) {
@@ -986,6 +1065,15 @@ async function withTypingIndicator<T>(params: {
       }
     }
   }
+}
+
+function buildThinkingNoticeText(params: {
+  role: UserRole;
+  elapsedSeconds: number;
+}): string {
+  return params.role === "admin"
+    ? `我已思考 ${params.elapsedSeconds} 秒，还在处理，稍等一下。`
+    : `我已经想了 ${params.elapsedSeconds} 秒，还在处理，稍等我一下哦。`;
 }
 
 export interface WechatWorkerOptions {
@@ -1085,13 +1173,19 @@ export class WechatWorker {
     client: ILinkApiClient,
     inbound: ReturnType<typeof normalizeInboundWechatMessages>[number],
   ): Promise<void> {
-    const route = resolveRole({ configuredRole: account.role });
+    const accountRoute = resolveRole({ configuredRole: account.role });
     const session = ensureActiveSession({
       database: this.options.database,
       wechatAccountId: inbound.wechatAccountId,
       contactId: inbound.contactId,
-      role: route.role,
+      role: accountRoute.role,
     });
+    const existingSessionMemory = parseSessionMemory(session.memoryJson);
+    const route: { role: UserRole } =
+      existingSessionMemory.routeMode === "admin" ||
+      existingSessionMemory.routeMode === "family"
+        ? { role: existingSessionMemory.routeMode }
+        : { role: accountRoute.role };
 
     const activeSession = this.options.database.saveSession({
       id: session.id,
@@ -1223,8 +1317,14 @@ export class WechatWorker {
                 session: sessionForReply,
                 database: this.options.database,
                 role: route.role,
+                accountRole: accountRoute.role,
+                sessionMemory: sessionMemory,
                 account,
                 config: this.options.config,
+                onRoleModeChanged: () => {
+                  this.codexBackends.admin.clearSession(activeSession.id);
+                  this.codexBackends.family.clearSession(activeSession.id);
+                },
               });
       } catch (error) {
         console.error("[worker] command failed", error);
@@ -1235,16 +1335,20 @@ export class WechatWorker {
       }
     } else {
       try {
+        const progress: CodexProgressEvent = { phase: "thinking" };
         rawReply = await withTypingIndicator({
           client,
           toUserId: inbound.contactId,
           contextToken: inbound.contextToken,
           typingRefreshMs: this.options.config.wechat.typingRefreshMs,
-          thinkingNoticeMs: this.options.config.wechat.thinkingNoticeMs,
-          thinkingNoticeText:
-            route.role === "admin"
-              ? "我还在处理，稍等一下。"
-              : "我还在想，稍等我一下。",
+          thinkingNoticeIntervalMs:
+            this.options.config.wechat.thinkingNoticeMs,
+          shouldSendThinkingNotice: () => progress.phase === "thinking",
+          buildThinkingNoticeText: (elapsedSeconds) =>
+            buildThinkingNoticeText({
+              role: route.role,
+              elapsedSeconds,
+            }),
           work: () =>
             buildCodexReply({
               backend: this.codexBackends[route.role],
@@ -1254,6 +1358,9 @@ export class WechatWorker {
               userText: userTextForCodex,
               persistentContext:
                 this.options.config.codex[route.role].backend === "acp",
+              onProgress: (event) => {
+                progress.phase = event.phase;
+              },
             }),
         });
         rawReply = await handleAssistantFileActions({
