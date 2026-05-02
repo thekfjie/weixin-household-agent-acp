@@ -179,6 +179,21 @@ function formatSessionSnapshot(session: SessionRecord): string {
   return parts.join("\n");
 }
 
+function summarizeRecentMessagesInline(
+  messages: ReturnType<AppDatabase["listSessionMessages"]>,
+): string | undefined {
+  const recent = messages
+    .slice(-4)
+    .map((message) => {
+      const speaker = message.direction === "inbound" ? "用户" : "助手";
+      const text = message.textContent?.trim() || "[非文本消息]";
+      return `${speaker}：${text}`;
+    })
+    .filter(Boolean);
+
+  return recent.length > 0 ? recent.join(" / ") : undefined;
+}
+
 function findPreviousSession(params: {
   database: AppDatabase;
   session: SessionRecord;
@@ -334,8 +349,28 @@ function buildCrossDayNotice(params: {
   return "前置信息：这条消息属于新的一天里的新对话；如当前语境需要，再自然参考上一段对话摘要，不要生硬提起。";
 }
 
-function shouldAttachPreviousSessionHint(text: string): boolean {
-  return /(上一次|上回|昨天|前天|之前那个|前面的那个)/.test(text);
+function detectPreviousSessionReference(
+  text: string,
+): "previous" | "yesterday" | undefined {
+  const normalized = text.replace(/\s+/g, "");
+
+  if (
+    /(上一次|上回|上次|上一段|之前那个|前面的那个|之前那次|上个对话|刚才那个)/.test(
+      normalized,
+    )
+  ) {
+    return "previous";
+  }
+
+  if (
+    /(昨天那个|昨天那次|昨天那份|昨天说的|昨天聊的|昨天做的|昨天发的|昨天提到的|前天那个|前天那次)/.test(
+      normalized,
+    )
+  ) {
+    return "yesterday";
+  }
+
+  return undefined;
 }
 
 function buildPreviousSessionHint(params: {
@@ -343,30 +378,49 @@ function buildPreviousSessionHint(params: {
   session: SessionRecord;
   userText: string;
 }): string | undefined {
-  if (!shouldAttachPreviousSessionHint(params.userText)) {
+  const referenceKind = detectPreviousSessionReference(params.userText);
+  if (!referenceKind) {
     return undefined;
   }
 
   const previous =
-    findYesterdaySession({
-      database: params.database,
-      session: params.session,
-    }) ??
-    findPreviousSession({
-      database: params.database,
-      session: params.session,
-    });
+    referenceKind === "yesterday"
+      ? findYesterdaySession({
+          database: params.database,
+          session: params.session,
+        }) ??
+        findPreviousSession({
+          database: params.database,
+          session: params.session,
+        })
+      : findPreviousSession({
+          database: params.database,
+          session: params.session,
+        }) ??
+        findYesterdaySession({
+          database: params.database,
+          session: params.session,
+        });
 
   if (!previous) {
     return undefined;
   }
 
+  const recentMessages = params.database
+    .listSessionMessages(previous.id, 4)
+    .reverse();
   const lines = [
-    "前置信息：用户这次提到了昨天/上一次，如相关可参考上一段对话信息。",
+    referenceKind === "yesterday"
+      ? "前置信息：用户这次提到了昨天的那段内容，如相关可参考上一段对话信息。"
+      : "前置信息：用户这次提到了上一次/之前那段内容，如相关可参考上一段对话信息。",
     `上一段对话时间：${previous.lastActiveAt}`,
   ];
   if (previous.summaryText.trim()) {
     lines.push(`上一段对话摘要：${previous.summaryText.trim()}`);
+  }
+  const recentInline = summarizeRecentMessagesInline(recentMessages);
+  if (recentInline) {
+    lines.push(`上一段最近消息：${recentInline}`);
   }
   return lines.join("\n");
 }
