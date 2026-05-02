@@ -277,6 +277,33 @@ function summarizeCarryoverContext(params: {
   return lines.join("\n").trim();
 }
 
+function buildDeterministicSessionSummary(params: {
+  session: SessionRecord;
+  recentMessages: ReturnType<AppDatabase["listSessionMessages"]>;
+}): string {
+  const parts: string[] = [];
+
+  const recentInline = summarizeRecentMessagesInline(params.recentMessages);
+  if (recentInline) {
+    parts.push(`最近对话：${recentInline}`);
+  }
+
+  const attachmentMentions = params.recentMessages
+    .filter((message) => message.filePath)
+    .slice(-3)
+    .map((message) => path.basename(message.filePath ?? ""))
+    .filter(Boolean);
+  if (attachmentMentions.length > 0) {
+    parts.push(`相关文件：${attachmentMentions.join("、")}`);
+  }
+
+  if (parts.length === 0) {
+    return "";
+  }
+
+  return parts.join("\n");
+}
+
 function shouldRotateByThresholds(params: {
   session: SessionRecord;
   memory: SessionMemoryState;
@@ -1651,11 +1678,17 @@ export class WechatWorker {
       existingSessionMemory.routeMode === "family"
         ? { role: existingSessionMemory.routeMode }
         : { role: accountRoute.role };
+    const recentMessagesForCarryover = this.options.database
+      .listSessionMessages(session.id, 12)
+      .reverse();
+    const archivedSummary =
+      buildDeterministicSessionSummary({
+        session,
+        recentMessages: recentMessagesForCarryover,
+      }) || session.summaryText;
     const carryoverSummary = summarizeCarryoverContext({
       session,
-      recentMessages: this.options.database
-        .listSessionMessages(session.id, 12)
-        .reverse(),
+      recentMessages: recentMessagesForCarryover,
     });
     const rotateDecision = shouldRotateByThresholds({
       session,
@@ -1663,10 +1696,11 @@ export class WechatWorker {
       config: this.options.config,
     });
     const sessionForTurn = rotateDecision.shouldRotate
-      ? createNextSession({
+        ? createNextSession({
           database: this.options.database,
           previousSession: session,
           role: route.role,
+          summaryText: archivedSummary,
           memoryJson: stringifySessionMemory({
             ...(existingSessionMemory.routeMode
               ? { routeMode: existingSessionMemory.routeMode }

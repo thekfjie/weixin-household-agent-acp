@@ -26,6 +26,8 @@ TIMEZONE="${DEFAULT_TIMEZONE}"
 CODEX_CLI_AUTH_MODE="api_key"
 CODEX_CLI_BASE_URL=""
 CODEX_CLI_API_KEY=""
+CODEX_CLI_MODEL="gpt-5.4"
+CODEX_CLI_REVIEW_MODEL="gpt-5.4"
 USER_MODE="current"
 SERVICE_USER="weixin-agent"
 SERVICE_GROUP="weixin-agent"
@@ -75,6 +77,8 @@ usage() {
       --codex-auth-mode MODE        api_key|login，默认 api_key
       --codex-base-url URL          第三方兼容 API Base URL
       --codex-api-key KEY           第三方兼容 API Key
+      --codex-model MODEL           对话模型，默认 gpt-5.4
+      --codex-review-model MODEL    压缩/回顾模型，默认 gpt-5.4
       --user-mode current|dedicated 服务用户模式，默认 current
       --service-user USER           dedicated 模式下的服务用户名
       --permission-mode MODE        none|limited|full sudo 策略，默认 full
@@ -335,6 +339,14 @@ parse_args() {
         CODEX_CLI_API_KEY="$2"
         shift 2
         ;;
+      --codex-model)
+        CODEX_CLI_MODEL="$2"
+        shift 2
+        ;;
+      --codex-review-model)
+        CODEX_CLI_REVIEW_MODEL="$2"
+        shift 2
+        ;;
       --user-mode)
         USER_MODE="$2"
         shift 2
@@ -513,6 +525,8 @@ configure_interactively() {
     CODEX_CLI_BASE_URL="$(prompt_default "第三方兼容 API Base URL" "${CODEX_CLI_BASE_URL}")"
     CODEX_CLI_API_KEY="$(prompt_default "第三方兼容 API Key" "${CODEX_CLI_API_KEY}")"
   fi
+  CODEX_CLI_MODEL="$(prompt_default "Codex 对话模型" "${CODEX_CLI_MODEL}")"
+  CODEX_CLI_REVIEW_MODEL="$(prompt_default "Codex 压缩/回顾模型" "${CODEX_CLI_REVIEW_MODEL}")"
 
   if [[ "${YES}" -eq 0 ]]; then
     echo ""
@@ -656,8 +670,8 @@ CODEX_CLI_PROVIDER_NAME=OpenAI
 CODEX_CLI_BASE_URL=${CODEX_CLI_BASE_URL}
 CODEX_CLI_API_KEY=${CODEX_CLI_API_KEY}
 CODEX_CLI_WIRE_API=responses
-CODEX_CLI_MODEL=gpt-5.4
-CODEX_CLI_REVIEW_MODEL=gpt-5.4
+CODEX_CLI_MODEL=${CODEX_CLI_MODEL}
+CODEX_CLI_REVIEW_MODEL=${CODEX_CLI_REVIEW_MODEL}
 CODEX_CLI_REASONING_EFFORT=xhigh
 CODEX_CLI_DISABLE_RESPONSE_STORAGE=true
 CODEX_CLI_NETWORK_ACCESS=enabled
@@ -814,8 +828,8 @@ run_node_as_service_user() {
     "CODEX_CLI_BASE_URL=${CODEX_CLI_BASE_URL}"
     "CODEX_CLI_API_KEY=${CODEX_CLI_API_KEY}"
     "CODEX_CLI_WIRE_API=responses"
-    "CODEX_CLI_MODEL=gpt-5.4"
-    "CODEX_CLI_REVIEW_MODEL=gpt-5.4"
+    "CODEX_CLI_MODEL=${CODEX_CLI_MODEL}"
+    "CODEX_CLI_REVIEW_MODEL=${CODEX_CLI_REVIEW_MODEL}"
     "CODEX_CLI_REASONING_EFFORT=xhigh"
     "CODEX_CLI_DISABLE_RESPONSE_STORAGE=true"
     "CODEX_CLI_NETWORK_ACCESS=enabled"
@@ -1039,6 +1053,8 @@ main() {
   if [[ "${CODEX_CLI_AUTH_MODE}" == "api_key" ]]; then
     echo "Codex Base URL：${CODEX_CLI_BASE_URL:-"(未设置)"}"
   fi
+  echo "Codex 对话模型：${CODEX_CLI_MODEL}"
+  echo "Codex 压缩/回顾模型：${CODEX_CLI_REVIEW_MODEL}"
   echo "端口：${PORT}"
   echo "时区：${TIMEZONE}"
   echo "首次扫码角色：${LOGIN_ROLE}"
