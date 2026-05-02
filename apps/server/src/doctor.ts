@@ -300,7 +300,7 @@ async function run(): Promise<void> {
 
   try {
     const database = new AppDatabase(
-      path.join(config.server.dataDir, "weixin-household-codex-gateway.sqlite"),
+      path.join(config.server.dataDir, "weixin-household-gateway.sqlite"),
     );
     database.initialize();
     const accounts = database.listAccounts();

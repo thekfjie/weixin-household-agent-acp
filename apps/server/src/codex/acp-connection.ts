@@ -297,7 +297,7 @@ export class AcpConnection {
       conn.initialize({
         protocolVersion: PROTOCOL_VERSION,
         clientInfo: {
-          name: "weixin-household-codex-gateway",
+          name: "weixin-household-gateway",
           version: "0.1.0",
         },
         clientCapabilities: {},

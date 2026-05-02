@@ -1,12 +1,12 @@
 [Unit]
-Description=weixin-household-agent-acp
+Description=weixin-household-gateway
 After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/weixin-household-agent-acp
+WorkingDirectory=/opt/weixin-household-gateway
 Environment=NODE_ENV=production
-EnvironmentFile=/opt/weixin-household-agent-acp/.env
+EnvironmentFile=/opt/weixin-household-gateway/.env
 ExecStart=/usr/bin/env node dist/apps/server/index.js
 Restart=always
 RestartSec=5

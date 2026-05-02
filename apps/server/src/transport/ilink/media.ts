@@ -85,7 +85,7 @@ function describeUploadUrl(url: string): string {
 }
 
 function createClientId(): string {
-  return `weixin-household-codex-gateway-${crypto.randomUUID()}`;
+  return `weixin-household-gateway-${crypto.randomUUID()}`;
 }
 
 function detectUploadMediaType(_filePath: string): ILinkUploadMediaTypeValue {

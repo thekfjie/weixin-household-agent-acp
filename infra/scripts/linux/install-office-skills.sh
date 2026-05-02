@@ -67,4 +67,4 @@ done
 
 echo ""
 echo "办公技能安装完成：${installed}/${#SKILLS[@]}"
-echo "下一步：sudo systemctl restart weixin-household-codex-gateway"
+echo "下一步：sudo systemctl restart weixin-household-gateway"

@@ -43,7 +43,7 @@ function printAccount(account: WechatAccountRecord): void {
 function openDatabase(): AppDatabase {
   const config = loadConfig();
   const database = new AppDatabase(
-      path.join(config.server.dataDir, "weixin-household-codex-gateway.sqlite"),
+      path.join(config.server.dataDir, "weixin-household-gateway.sqlite"),
   );
   database.initialize();
   return database;

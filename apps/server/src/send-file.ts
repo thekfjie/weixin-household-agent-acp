@@ -162,7 +162,7 @@ async function run(): Promise<void> {
   const config = loadConfig();
   const dbPath = path.join(
     config.server.dataDir,
-    "weixin-household-codex-gateway.sqlite",
+    "weixin-household-gateway.sqlite",
   );
   const database = new AppDatabase(dbPath);
   database.initialize();

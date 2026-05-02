@@ -3,12 +3,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
-SERVICE_NAME="weixin-household-codex-gateway"
+SERVICE_NAME="weixin-household-gateway"
 PNPM_VERSION="10.13.1"
 STATE_FILE_NAME=".install-state"
 
 DEFAULT_APP_DIR="${REPO_DIR}"
-DEFAULT_DATA_DIR="/var/lib/weixin-household-codex-gateway"
+DEFAULT_DATA_DIR="/var/lib/weixin-household-gateway"
 DEFAULT_PORT="18080"
 DEFAULT_TIMEZONE="Asia/Shanghai"
 LEGACY_TMP_ENV="/tmp/${SERVICE_NAME}.env"
@@ -23,6 +23,9 @@ APP_DIR="${DEFAULT_APP_DIR}"
 DATA_DIR="${DEFAULT_DATA_DIR}"
 PORT="${DEFAULT_PORT}"
 TIMEZONE="${DEFAULT_TIMEZONE}"
+CODEX_CLI_AUTH_MODE="api_key"
+CODEX_CLI_BASE_URL=""
+CODEX_CLI_API_KEY=""
 USER_MODE="current"
 SERVICE_USER="weixin-agent"
 SERVICE_GROUP="weixin-agent"
@@ -69,6 +72,9 @@ usage() {
       --data-dir PATH               数据目录，默认 ${DEFAULT_DATA_DIR}
       --port PORT                   服务端口，默认 ${DEFAULT_PORT}
       --timezone TZ                 业务时区，默认 ${DEFAULT_TIMEZONE}
+      --codex-auth-mode MODE        api_key|login，默认 api_key
+      --codex-base-url URL          第三方兼容 API Base URL
+      --codex-api-key KEY           第三方兼容 API Key
       --user-mode current|dedicated 服务用户模式，默认 current
       --service-user USER           dedicated 模式下的服务用户名
       --permission-mode MODE        none|limited|full sudo 策略，默认 full
@@ -256,6 +262,30 @@ ensure_node_runtime() {
   fi
 }
 
+ensure_codex_cli() {
+  if command -v codex >/dev/null 2>&1; then
+    return
+  fi
+
+  echo "未检测到 codex 命令。"
+  if ! prompt_yes_no "是否现在用 npm 全局安装 @openai/codex？" "y"; then
+    echo "缺少 codex。请先安装 Codex CLI 后再继续。" >&2
+    exit 1
+  fi
+
+  if ! command -v npm >/dev/null 2>&1; then
+    echo "未检测到 npm，无法安装 @openai/codex。" >&2
+    exit 1
+  fi
+
+  sudo npm install -g @openai/codex
+
+  if ! command -v codex >/dev/null 2>&1; then
+    echo "安装后仍未找到 codex 命令。" >&2
+    exit 1
+  fi
+}
+
 validate_choice() {
   local value="$1"
   shift
@@ -291,6 +321,18 @@ parse_args() {
         ;;
       --timezone)
         TIMEZONE="$2"
+        shift 2
+        ;;
+      --codex-auth-mode)
+        CODEX_CLI_AUTH_MODE="$2"
+        shift 2
+        ;;
+      --codex-base-url)
+        CODEX_CLI_BASE_URL="$2"
+        shift 2
+        ;;
+      --codex-api-key)
+        CODEX_CLI_API_KEY="$2"
         shift 2
         ;;
       --user-mode)
@@ -463,6 +505,14 @@ configure_interactively() {
   DATA_DIR="$(prompt_default "数据目录" "${DATA_DIR}")"
   PORT="$(prompt_default "服务端口" "${PORT}")"
   TIMEZONE="$(prompt_default "业务时区" "${TIMEZONE}")"
+  CODEX_CLI_AUTH_MODE="$(prompt_default "Codex 认证模式(api_key/login)" "${CODEX_CLI_AUTH_MODE}")"
+
+  validate_choice "${CODEX_CLI_AUTH_MODE}" api_key login
+
+  if [[ "${CODEX_CLI_AUTH_MODE}" == "api_key" ]]; then
+    CODEX_CLI_BASE_URL="$(prompt_default "第三方兼容 API Base URL" "${CODEX_CLI_BASE_URL}")"
+    CODEX_CLI_API_KEY="$(prompt_default "第三方兼容 API Key" "${CODEX_CLI_API_KEY}")"
+  fi
 
   if [[ "${YES}" -eq 0 ]]; then
     echo ""
@@ -567,7 +617,7 @@ DATA_DIR=${DATA_DIR}
 
 WECHAT_API_BASE_URL=https://ilinkai.weixin.qq.com
 WECHAT_CDN_BASE_URL=https://novac2c.cdn.weixin.qq.com/c2c
-WECHAT_CHANNEL_VERSION=weixin-household-codex-gateway-0.1.0
+WECHAT_CHANNEL_VERSION=weixin-household-gateway-0.1.0
 WECHAT_ROUTE_TAG=
 WECHAT_TYPING_REFRESH_MS=7000
 WECHAT_THINKING_NOTICE_MS=30000
@@ -599,12 +649,12 @@ CODEX_FAMILY_ENV_PASSTHROUGH=
 
 CODEX_TIMEOUT_MS=180000
 
-CODEX_CLI_AUTH_MODE=login
+CODEX_CLI_AUTH_MODE=${CODEX_CLI_AUTH_MODE}
 CODEX_CLI_HOME=
 CODEX_CLI_PROVIDER=OpenAI
 CODEX_CLI_PROVIDER_NAME=OpenAI
-CODEX_CLI_BASE_URL=
-CODEX_CLI_API_KEY=
+CODEX_CLI_BASE_URL=${CODEX_CLI_BASE_URL}
+CODEX_CLI_API_KEY=${CODEX_CLI_API_KEY}
 CODEX_CLI_WIRE_API=responses
 CODEX_CLI_MODEL=gpt-5.4
 CODEX_CLI_REVIEW_MODEL=gpt-5.4
@@ -730,7 +780,7 @@ run_node_as_service_user() {
     "DATA_DIR=${DATA_DIR}"
     "WECHAT_API_BASE_URL=https://ilinkai.weixin.qq.com"
     "WECHAT_CDN_BASE_URL=https://novac2c.cdn.weixin.qq.com/c2c"
-    "WECHAT_CHANNEL_VERSION=weixin-household-codex-gateway-0.1.0"
+    "WECHAT_CHANNEL_VERSION=weixin-household-gateway-0.1.0"
     "WECHAT_TYPING_REFRESH_MS=7000"
     "WECHAT_THINKING_NOTICE_MS=30000"
     "WECHAT_REPLY_CHUNK_CHARS=1800"
@@ -757,12 +807,12 @@ run_node_as_service_user() {
     "CODEX_FAMILY_ENV_MODE=minimal"
     "CODEX_FAMILY_ENV_PASSTHROUGH="
     "CODEX_TIMEOUT_MS=180000"
-    "CODEX_CLI_AUTH_MODE=login"
+    "CODEX_CLI_AUTH_MODE=${CODEX_CLI_AUTH_MODE}"
     "CODEX_CLI_HOME="
     "CODEX_CLI_PROVIDER=OpenAI"
     "CODEX_CLI_PROVIDER_NAME=OpenAI"
-    "CODEX_CLI_BASE_URL="
-    "CODEX_CLI_API_KEY="
+    "CODEX_CLI_BASE_URL=${CODEX_CLI_BASE_URL}"
+    "CODEX_CLI_API_KEY=${CODEX_CLI_API_KEY}"
     "CODEX_CLI_WIRE_API=responses"
     "CODEX_CLI_MODEL=gpt-5.4"
     "CODEX_CLI_REVIEW_MODEL=gpt-5.4"
@@ -791,7 +841,7 @@ run_node_as_service_user() {
 }
 
 has_saved_accounts() {
-  local db_file="${DATA_DIR}/weixin-household-codex-gateway.sqlite"
+  local db_file="${DATA_DIR}/weixin-household-gateway.sqlite"
 
   if [[ ! -f "${db_file}" ]]; then
     return 1
@@ -924,6 +974,23 @@ print_codex_setup_help() {
   echo "  5. 最后运行：node dist/apps/server/doctor.js --acp-session"
 }
 
+configure_codex_cli() {
+  pushd "${APP_DIR}" >/dev/null
+  if [[ "${CODEX_CLI_AUTH_MODE}" == "api_key" ]]; then
+    if [[ -z "${CODEX_CLI_BASE_URL}" || -z "${CODEX_CLI_API_KEY}" ]]; then
+      echo "已选择 api_key 模式，但未提供完整的 CODEX_CLI_BASE_URL / CODEX_CLI_API_KEY。" >&2
+      exit 1
+    fi
+    run_node_as_service_user "dist/apps/server/configure-codex.js" --apply
+  else
+    echo ""
+    echo "当前选择 login 模式。请在服务用户环境里执行："
+    echo "  codex login"
+    echo "然后再继续使用 doctor 校验 ACP 链路。"
+  fi
+  popd >/dev/null
+}
+
 print_summary() {
   echo ""
   echo "安装完成。"
@@ -955,6 +1022,7 @@ main() {
   ensure_command_with_prompt sudo "${package_manager}" sudo
   ensure_command_with_prompt git "${package_manager}" git
   require_node_version
+  ensure_codex_cli
 
   configure_interactively
   capture_preinstall_state
@@ -967,6 +1035,10 @@ main() {
   echo "数据目录：${DATA_DIR}"
   echo "服务用户：${SERVICE_USER}:${SERVICE_GROUP}"
   echo "服务用户 sudo 策略：${PERMISSION_MODE}"
+  echo "Codex 认证模式：${CODEX_CLI_AUTH_MODE}"
+  if [[ "${CODEX_CLI_AUTH_MODE}" == "api_key" ]]; then
+    echo "Codex Base URL：${CODEX_CLI_BASE_URL:-"(未设置)"}"
+  fi
   echo "端口：${PORT}"
   echo "时区：${TIMEZONE}"
   echo "首次扫码角色：${LOGIN_ROLE}"
@@ -978,18 +1050,11 @@ main() {
     exit 0
   fi
 
-  if ! command -v codex >/dev/null 2>&1; then
-    echo ""
-    echo "未检测到 codex 命令。"
-    echo "当前安装器不会私自替你决定 Codex CLI 的安装来源。"
-    print_codex_setup_help
-    exit 1
-  fi
-
   sync_app_dir
   prepare_system_backups
   install_env_and_service
   build_project
+  configure_codex_cli
   run_login_if_needed
   start_service
   run_post_install_doctor

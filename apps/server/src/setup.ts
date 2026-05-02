@@ -51,7 +51,7 @@ async function runSetup(): Promise<void> {
   const force = process.argv.includes("--force");
   const dbPath = path.join(
     config.server.dataDir,
-    "weixin-household-codex-gateway.sqlite",
+    "weixin-household-gateway.sqlite",
   );
   const database = new AppDatabase(dbPath);
   database.initialize();

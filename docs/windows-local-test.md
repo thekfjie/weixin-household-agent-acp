@@ -1,60 +1,53 @@
-# Windows 本地测试说明
+# Windows 鏈湴娴嬭瘯璇存槑
 
-这份说明面向当前开发机：
+杩欎唤璇存槑闈㈠悜褰撳墠寮€鍙戞満锛?
+- 浠撳簱鐩綍锛歚E:\program\weixin-household-gateway`
+- 鐩爣锛氬厛鍦?Windows 涓婂畬鎴愭湰鍦拌仈璋冿紝鍐嶈縼绉诲埌 Linux 鏈嶅姟鍣?
+## 鎺ㄨ崘鍏ュ彛
 
-- 仓库目录：`E:\program\weixin-household-agent-acp`
-- 目标：先在 Windows 上完成本地联调，再迁移到 Linux 服务器
-
-## 推荐入口
-
-直接运行：
-
+鐩存帴杩愯锛?
 ```powershell
 .\infra\scripts\windows\run-local.cmd
 ```
 
-脚本会自动完成：
+鑴氭湰浼氳嚜鍔ㄥ畬鎴愶細
 
-1. 设置仓库内的 `COREPACK_HOME` 和 `PNPM_HOME`
-2. 创建 `data`、`runtime/codex-admin`、`runtime/codex-family`
-3. 安装依赖
-4. 构建 TypeScript
-5. 如果本地还没有微信账号，打印二维码并等待扫码确认
-6. 启动服务
+1. 璁剧疆浠撳簱鍐呯殑 `COREPACK_HOME` 鍜?`PNPM_HOME`
+2. 鍒涘缓 `data`銆乣runtime/codex-admin`銆乣runtime/codex-family`
+3. 瀹夎渚濊禆
+4. 鏋勫缓 TypeScript
+5. 濡傛灉鏈湴杩樻病鏈夊井淇¤处鍙凤紝鎵撳嵃浜岀淮鐮佸苟绛夊緟鎵爜纭
+6. 鍚姩鏈嶅姟
 
-已有账号时会自动跳过扫码。
+宸叉湁璐﹀彿鏃朵細鑷姩璺宠繃鎵爜銆?
+## 甯哥敤鍙傛暟
 
-## 常用参数
-
-绑定首个账号为 `admin`，这是默认行为：
+缁戝畾棣栦釜璐﹀彿涓?`admin`锛岃繖鏄粯璁よ涓猴細
 
 ```powershell
 .\infra\scripts\windows\run-local.cmd -Role admin
 ```
 
-绑定家人账号：
-
+缁戝畾瀹朵汉璐﹀彿锛?
 ```powershell
 .\infra\scripts\windows\run-local.cmd -Role family -ForceSetup
 ```
 
-只启动，不做扫码检查：
+鍙惎鍔紝涓嶅仛鎵爜妫€鏌ワ細
 
 ```powershell
 .\infra\scripts\windows\run-local.cmd -SkipSetup
 ```
 
-## 默认本地目录
+## 榛樿鏈湴鐩綍
 
-为了方便 Windows 本地测试，项目默认把运行目录放在仓库内部：
+涓轰簡鏂逛究 Windows 鏈湴娴嬭瘯锛岄」鐩粯璁ゆ妸杩愯鐩綍鏀惧湪浠撳簱鍐呴儴锛?
+- 鏁版嵁鐩綍锛歚.\data`
+- admin 宸ヤ綔鐩綍锛歚.\runtime\codex-admin`
+- family 宸ヤ綔鐩綍锛歚.\runtime\codex-family`
 
-- 数据目录：`.\data`
-- admin 工作目录：`.\runtime\codex-admin`
-- family 工作目录：`.\runtime\codex-family`
-
-迁移到 Linux 后可通过 `.env` 或环境变量覆盖这些路径。
-
-## 常用环境变量
+杩佺Щ鍒?Linux 鍚庡彲閫氳繃 `.env` 鎴栫幆澧冨彉閲忚鐩栬繖浜涜矾寰勩€?
+## 甯哥敤鐜鍙橀噺
 
 - `PORT`
 - `TIMEZONE`
@@ -70,27 +63,19 @@
 - `CODEX_FAMILY_MODE`
 - `CODEX_FAMILY_WORKSPACE`
 
-Windows 默认优先使用 `codex.cmd`。如果你的本机命令不同，可以手动设置：
-
+Windows 榛樿浼樺厛浣跨敤 `codex.cmd`銆傚鏋滀綘鐨勬湰鏈哄懡浠や笉鍚岋紝鍙互鎵嬪姩璁剧疆锛?
 ```powershell
 $env:CODEX_ADMIN_COMMAND = "codex.cmd"
 $env:CODEX_FAMILY_COMMAND = "codex.cmd"
 ```
 
-## 当前适合验证的内容
-
-- 配置读取
-- 数据库初始化
-- 会话创建
-- 终端二维码登录
-- 多账号绑定记录
-- 长轮询 worker 是否能启动
-- Codex 路由预览
-- 文件上传发送模块的入参和出口
-
-## 仍需真实环境 E2E 的内容
-
-- 服务器上的真实扫码登录
-- 真实微信文本消息收发闭环
-- 真实 Codex 自动回复闭环
-- 真实微信文件发送 smoke test
+## 褰撳墠閫傚悎楠岃瘉鐨勫唴瀹?
+- 閰嶇疆璇诲彇
+- 鏁版嵁搴撳垵濮嬪寲
+- 浼氳瘽鍒涘缓
+- 缁堢浜岀淮鐮佺櫥褰?- 澶氳处鍙风粦瀹氳褰?- 闀胯疆璇?worker 鏄惁鑳藉惎鍔?- Codex 璺敱棰勮
+- 鏂囦欢涓婁紶鍙戦€佹ā鍧楃殑鍏ュ弬鍜屽嚭鍙?
+## 浠嶉渶鐪熷疄鐜 E2E 鐨勫唴瀹?
+- 鏈嶅姟鍣ㄤ笂鐨勭湡瀹炴壂鐮佺櫥褰?- 鐪熷疄寰俊鏂囨湰娑堟伅鏀跺彂闂幆
+- 鐪熷疄 Codex 鑷姩鍥炲闂幆
+- 鐪熷疄寰俊鏂囦欢鍙戦€?smoke test

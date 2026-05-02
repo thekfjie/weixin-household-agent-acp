@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SERVICE_NAME="weixin-household-codex-gateway"
-DEFAULT_APP_DIR="/opt/weixin-household-codex-gateway"
-DEFAULT_DATA_DIR="/var/lib/weixin-household-codex-gateway"
+SERVICE_NAME="weixin-household-gateway"
+DEFAULT_APP_DIR="/opt/weixin-household-gateway"
+DEFAULT_DATA_DIR="/var/lib/weixin-household-gateway"
 STATE_FILE_NAME=".install-state"
 LEGACY_TMP_ENV="/tmp/${SERVICE_NAME}.env"
 LEGACY_TMP_SERVICE="/tmp/${SERVICE_NAME}.service"
@@ -195,7 +195,7 @@ load_state() {
 }
 
 remove_known_data_contents() {
-  sudo rm -f "${DATA_DIR}/weixin-household-codex-gateway.sqlite"*
+  sudo rm -f "${DATA_DIR}/weixin-household-gateway.sqlite"*
   sudo rm -f "${DATA_DIR}/schema.sql"
   sudo rm -rf "${DATA_DIR}/qrcodes"
   sudo rm -rf "${DATA_DIR}/runtime"
