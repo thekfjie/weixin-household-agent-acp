@@ -285,6 +285,29 @@ export class AppDatabase {
     return rows.map(toSessionRecord);
   }
 
+  listSessionsByPeer(
+    wechatAccountId: string,
+    contactId: string,
+    limit = 20,
+  ): SessionRecord[] {
+    const rows = this.db
+      .prepare(
+        `
+        SELECT * FROM sessions
+        WHERE wechat_account_id = ? AND contact_id = ?
+        ORDER BY updated_at DESC
+        LIMIT ?
+        `,
+      )
+      .all(
+        wechatAccountId,
+        contactId,
+        limit,
+      ) as Array<Record<string, unknown>>;
+
+    return rows.map(toSessionRecord);
+  }
+
   saveSession(input: {
     id: string;
     wechatAccountId: string;

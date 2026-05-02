@@ -9,10 +9,11 @@ function nowIso(): string {
 export function buildSessionId(
   wechatAccountId: string,
   contactId: string,
+  nonce = nowIso(),
 ): string {
   return crypto
     .createHash("sha1")
-    .update(`${wechatAccountId}:${contactId}`, "utf8")
+    .update(`${wechatAccountId}:${contactId}:${nonce}`, "utf8")
     .digest("hex");
 }
 
@@ -87,5 +88,45 @@ export function ensureActiveSession(params: {
     contactId: params.contactId,
     role: params.role,
     lastActiveAt: nowIso(),
+  });
+}
+
+export function createNextSession(params: {
+  database: AppDatabase;
+  previousSession: SessionRecord;
+  role: UserRole;
+  summaryText?: string;
+  memoryJson?: string;
+  contextToken?: string;
+  lastActiveAt?: string;
+}): SessionRecord {
+  params.database.saveSession({
+    id: params.previousSession.id,
+    wechatAccountId: params.previousSession.wechatAccountId,
+    contactId: params.previousSession.contactId,
+    role: params.previousSession.role,
+    status: "archived",
+    summaryText: params.previousSession.summaryText,
+    memoryJson: params.previousSession.memoryJson,
+    contextToken: params.previousSession.contextToken,
+    lastActiveAt: params.previousSession.lastActiveAt,
+  });
+
+  const sessionId = buildSessionId(
+    params.previousSession.wechatAccountId,
+    params.previousSession.contactId,
+    crypto.randomUUID(),
+  );
+
+  return params.database.saveSession({
+    id: sessionId,
+    wechatAccountId: params.previousSession.wechatAccountId,
+    contactId: params.previousSession.contactId,
+    role: params.role,
+    status: "active",
+    ...(params.summaryText !== undefined ? { summaryText: params.summaryText } : {}),
+    ...(params.memoryJson !== undefined ? { memoryJson: params.memoryJson } : {}),
+    ...(params.contextToken !== undefined ? { contextToken: params.contextToken } : {}),
+    lastActiveAt: params.lastActiveAt ?? nowIso(),
   });
 }

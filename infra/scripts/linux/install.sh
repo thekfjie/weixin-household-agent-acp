@@ -3,12 +3,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
-SERVICE_NAME="weixin-household-agent-acp"
+SERVICE_NAME="weixin-household-codex-gateway"
 PNPM_VERSION="10.13.1"
 STATE_FILE_NAME=".install-state"
 
 DEFAULT_APP_DIR="${REPO_DIR}"
-DEFAULT_DATA_DIR="/var/lib/weixin-household-agent-acp"
+DEFAULT_DATA_DIR="/var/lib/weixin-household-codex-gateway"
 DEFAULT_PORT="18080"
 DEFAULT_TIMEZONE="Asia/Shanghai"
 LEGACY_TMP_ENV="/tmp/${SERVICE_NAME}.env"
@@ -119,6 +119,80 @@ prompt_yes_no() {
   esac
 }
 
+detect_package_manager() {
+  if command -v apt-get >/dev/null 2>&1; then
+    printf '%s\n' "apt"
+    return
+  fi
+
+  if command -v dnf >/dev/null 2>&1; then
+    printf '%s\n' "dnf"
+    return
+  fi
+
+  if command -v yum >/dev/null 2>&1; then
+    printf '%s\n' "yum"
+    return
+  fi
+
+  if command -v pacman >/dev/null 2>&1; then
+    printf '%s\n' "pacman"
+    return
+  fi
+
+  printf '%s\n' "unknown"
+}
+
+install_system_packages() {
+  local package_manager="$1"
+  shift
+  local packages=("$@")
+
+  case "${package_manager}" in
+    apt)
+      sudo apt-get update
+      sudo apt-get install -y "${packages[@]}"
+      ;;
+    dnf)
+      sudo dnf install -y "${packages[@]}"
+      ;;
+    yum)
+      sudo yum install -y "${packages[@]}"
+      ;;
+    pacman)
+      sudo pacman -Sy --noconfirm --needed "${packages[@]}"
+      ;;
+    *)
+      echo "当前系统包管理器不受支持，无法自动安装：${packages[*]}" >&2
+      exit 1
+      ;;
+  esac
+}
+
+ensure_command_with_prompt() {
+  local command_name="$1"
+  local package_manager="$2"
+  shift 2
+  local packages=("$@")
+
+  if command -v "${command_name}" >/dev/null 2>&1; then
+    return
+  fi
+
+  echo "未检测到命令：${command_name}"
+  if ! prompt_yes_no "是否现在用系统包管理器安装 ${command_name}？" "y"; then
+    echo "缺少必要命令：${command_name}" >&2
+    exit 1
+  fi
+
+  install_system_packages "${package_manager}" "${packages[@]}"
+
+  if ! command -v "${command_name}" >/dev/null 2>&1; then
+    echo "安装后仍未找到命令：${command_name}" >&2
+    exit 1
+  fi
+}
+
 require_command() {
   local command_name="$1"
   if ! command -v "${command_name}" >/dev/null 2>&1; then
@@ -131,6 +205,53 @@ require_non_root() {
   if [[ "${EUID}" -eq 0 ]]; then
     echo "请用普通登录用户运行安装器，不要在命令前加 sudo。" >&2
     echo "安装器会在需要写入 /opt、/var/lib、/etc/systemd/system 时单独调用 sudo。" >&2
+    exit 1
+  fi
+}
+
+ensure_node_runtime() {
+  if command -v node >/dev/null 2>&1; then
+    if node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major > 22 || (major === 22 && minor >= 5) ? 0 : 1);'; then
+      return
+    fi
+  fi
+
+  echo "未检测到可用的 Node.js >= 22.5.0。"
+  if ! prompt_yes_no "是否现在安装系统级 Node.js 22 LTS？" "y"; then
+    echo "需要 Node.js >= 22.5.0，因为项目使用 node:sqlite。" >&2
+    exit 1
+  fi
+
+  local package_manager
+  package_manager="$(detect_package_manager)"
+
+  case "${package_manager}" in
+    apt)
+      install_system_packages "${package_manager}" ca-certificates curl gnupg
+      curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+      install_system_packages "${package_manager}" nodejs
+      ;;
+    dnf|yum)
+      install_system_packages "${package_manager}" ca-certificates curl
+      curl -fsSL https://rpm.nodesource.com/setup_22.x | sudo bash -
+      install_system_packages "${package_manager}" nodejs
+      ;;
+    pacman)
+      install_system_packages "${package_manager}" nodejs npm
+      ;;
+    *)
+      echo "当前系统包管理器不受支持，无法自动安装 Node.js。请手动安装 Node.js 22 LTS 后重试。" >&2
+      exit 1
+      ;;
+  esac
+
+  if ! command -v node >/dev/null 2>&1; then
+    echo "Node.js 安装后仍不可用。" >&2
+    exit 1
+  fi
+
+  if ! node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major > 22 || (major === 22 && minor >= 5) ? 0 : 1);'; then
+    echo "安装后的 Node.js 版本仍低于 22.5.0：$(node -v)" >&2
     exit 1
   fi
 }
@@ -227,13 +348,7 @@ parse_args() {
 }
 
 require_node_version() {
-  require_command node
-
-  if ! node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major > 22 || (major === 22 && minor >= 5) ? 0 : 1);'; then
-    echo "需要 Node.js >= 22.5.0，因为项目使用 node:sqlite。" >&2
-    echo "当前版本：$(node -v)" >&2
-    exit 1
-  fi
+  ensure_node_runtime
 }
 
 resolve_codex_command() {
@@ -452,7 +567,7 @@ DATA_DIR=${DATA_DIR}
 
 WECHAT_API_BASE_URL=https://ilinkai.weixin.qq.com
 WECHAT_CDN_BASE_URL=https://novac2c.cdn.weixin.qq.com/c2c
-WECHAT_CHANNEL_VERSION=weixin-household-agent-acp-0.1.0
+WECHAT_CHANNEL_VERSION=weixin-household-codex-gateway-0.1.0
 WECHAT_ROUTE_TAG=
 WECHAT_TYPING_REFRESH_MS=7000
 WECHAT_THINKING_NOTICE_MS=30000
@@ -615,7 +730,7 @@ run_node_as_service_user() {
     "DATA_DIR=${DATA_DIR}"
     "WECHAT_API_BASE_URL=https://ilinkai.weixin.qq.com"
     "WECHAT_CDN_BASE_URL=https://novac2c.cdn.weixin.qq.com/c2c"
-    "WECHAT_CHANNEL_VERSION=weixin-household-agent-acp-0.1.0"
+    "WECHAT_CHANNEL_VERSION=weixin-household-codex-gateway-0.1.0"
     "WECHAT_TYPING_REFRESH_MS=7000"
     "WECHAT_THINKING_NOTICE_MS=30000"
     "WECHAT_REPLY_CHUNK_CHARS=1800"
@@ -676,7 +791,7 @@ run_node_as_service_user() {
 }
 
 has_saved_accounts() {
-  local db_file="${DATA_DIR}/weixin-household-agent-acp.sqlite"
+  local db_file="${DATA_DIR}/weixin-household-codex-gateway.sqlite"
 
   if [[ ! -f "${db_file}" ]]; then
     return 1
@@ -799,6 +914,16 @@ print_permission_summary() {
   echo "  - 卸载时会读取安装清单；自己创建的目录/用户会删除，覆盖前备份过的 systemd/sudoers 会恢复。"
 }
 
+print_codex_setup_help() {
+  echo ""
+  echo "还需要为服务用户准备 Codex CLI 和认证："
+  echo "  1. 确保当前服务用户能直接运行 codex"
+  echo "  2. 推荐在 .env 中配置第三方 API key，再运行：node dist/apps/server/configure-codex.js --apply"
+  echo "  3. 可选：如果不用 API key，也可以用这个真实用户执行：codex login"
+  echo "  4. 再执行：codex exec --skip-git-repo-check \"请用一句话回复：Codex 已接通\""
+  echo "  5. 最后运行：node dist/apps/server/doctor.js --acp-session"
+}
+
 print_summary() {
   echo ""
   echo "安装完成。"
@@ -823,8 +948,12 @@ print_summary() {
 main() {
   parse_args "$@"
   require_non_root
-  require_command git
-  require_command sudo
+  local package_manager
+  package_manager="$(detect_package_manager)"
+
+  ensure_command_with_prompt bash "${package_manager}" bash
+  ensure_command_with_prompt sudo "${package_manager}" sudo
+  ensure_command_with_prompt git "${package_manager}" git
   require_node_version
 
   configure_interactively
@@ -847,6 +976,14 @@ main() {
   if ! prompt_yes_no "继续安装？" "y"; then
     echo "安装已取消。"
     exit 0
+  fi
+
+  if ! command -v codex >/dev/null 2>&1; then
+    echo ""
+    echo "未检测到 codex 命令。"
+    echo "当前安装器不会私自替你决定 Codex CLI 的安装来源。"
+    print_codex_setup_help
+    exit 1
   fi
 
   sync_app_dir

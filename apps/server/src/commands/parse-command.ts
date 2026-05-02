@@ -3,6 +3,8 @@ import { BuiltInCommand, ParsedCommand } from "./types.js";
 const COMMANDS: readonly BuiltInCommand[] = [
   "/new",
   "/reset",
+  "/last",
+  "/yesterday",
   "/mode",
   "/summary",
   "/time",

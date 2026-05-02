@@ -111,7 +111,7 @@ function Invoke-Pnpm {
 }
 
 function Test-HasAccounts {
-  $dbPath = Join-Path $env:DATA_DIR "weixin-household-agent-acp.sqlite"
+  $dbPath = Join-Path $env:DATA_DIR "weixin-household-codex-gateway.sqlite"
   if (-not (Test-Path $dbPath)) {
     return $false
   }

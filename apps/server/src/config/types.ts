@@ -48,9 +48,16 @@ export interface WechatConfig {
   replyChunkChars: number;
 }
 
+export interface SessionConfig {
+  rotateIdleHours: number;
+  rotateMaxTurns: number;
+  rotateMaxEstimatedTokens: number;
+}
+
 export interface AppConfig {
   server: ServerConfig;
   wechat: WechatConfig;
+  session: SessionConfig;
   codex: {
     admin: CodexRuntimeConfig;
     family: CodexRuntimeConfig;

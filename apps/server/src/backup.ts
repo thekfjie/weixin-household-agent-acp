@@ -97,12 +97,12 @@ function run(): void {
   fs.writeFileSync(
     path.join(backupDir, "README.txt"),
     [
-      "weixin-household-agent-acp data backup",
+      "weixin-household-codex-gateway data backup",
       `created_at=${new Date().toISOString()}`,
       `source=${dataDir}`,
       "",
       "This backup copies the data directory only.",
-      "It does not copy /opt/weixin-household-agent-acp/.env or ~/.codex credentials.",
+      "It does not copy /opt/weixin-household-codex-gateway/.env or ~/.codex credentials.",
     ].join("\n"),
     "utf8",
   );

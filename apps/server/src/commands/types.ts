@@ -1,6 +1,8 @@
 export type BuiltInCommand =
   | "/new"
   | "/reset"
+  | "/last"
+  | "/yesterday"
   | "/mode"
   | "/summary"
   | "/time"

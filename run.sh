@@ -47,7 +47,7 @@ run_pnpm() {
 }
 
 has_accounts() {
-  local db_file="${DATA_DIR}/weixin-household-agent-acp.sqlite"
+  local db_file="${DATA_DIR}/weixin-household-codex-gateway.sqlite"
   [[ -f "${db_file}" ]] || return 1
 
   node -e '

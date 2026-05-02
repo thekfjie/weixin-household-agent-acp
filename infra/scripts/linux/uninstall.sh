@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SERVICE_NAME="weixin-household-agent-acp"
-DEFAULT_APP_DIR="/opt/weixin-household-agent-acp"
-DEFAULT_DATA_DIR="/var/lib/weixin-household-agent-acp"
+SERVICE_NAME="weixin-household-codex-gateway"
+DEFAULT_APP_DIR="/opt/weixin-household-codex-gateway"
+DEFAULT_DATA_DIR="/var/lib/weixin-household-codex-gateway"
 STATE_FILE_NAME=".install-state"
 LEGACY_TMP_ENV="/tmp/${SERVICE_NAME}.env"
 LEGACY_TMP_SERVICE="/tmp/${SERVICE_NAME}.service"
@@ -16,6 +16,7 @@ SERVICE_GROUP="weixin-agent"
 KEEP_DATA=0
 KEEP_USER=0
 FORCE_REMOVE_USER=0
+PURGE_ALL=0
 STATE_FILE=""
 APP_DIR_SET=0
 DATA_DIR_SET=0
@@ -47,6 +48,7 @@ usage() {
       --service-user USER   无安装清单时指定服务用户
       --keep-user           保留服务用户
       --remove-user         即使保留数据，也强制删除安装器创建的服务用户
+      --purge-all           明确强制删除 app/data 目录，即使安装前已存在
   -h, --help                显示帮助
 EOF
 }
@@ -124,6 +126,10 @@ parse_args() {
         FORCE_REMOVE_USER=1
         shift
         ;;
+      --purge-all)
+        PURGE_ALL=1
+        shift
+        ;;
       -h|--help)
         usage
         exit 0
@@ -189,7 +195,7 @@ load_state() {
 }
 
 remove_known_data_contents() {
-  sudo rm -f "${DATA_DIR}/weixin-household-agent-acp.sqlite"*
+  sudo rm -f "${DATA_DIR}/weixin-household-codex-gateway.sqlite"*
   sudo rm -f "${DATA_DIR}/schema.sql"
   sudo rm -rf "${DATA_DIR}/qrcodes"
   sudo rm -rf "${DATA_DIR}/runtime"
@@ -219,9 +225,15 @@ restore_or_remove_sudoers() {
 }
 
 remove_app_dir() {
+  if [[ "${PURGE_ALL}" -eq 1 ]]; then
+    sudo rm -rf "${APP_DIR}"
+    echo "已强制删除应用目录：${APP_DIR}"
+    return
+  fi
+
   if [[ "${STATE_FOUND}" -eq 1 && "${INSTALL_APP_DIR_CREATED_BY_INSTALLER}" != "1" ]]; then
     echo "应用目录安装前已存在，保守起见不删除：${APP_DIR}"
-    echo "如确认整个目录都不需要，可手动删除。"
+    echo "如确认整个目录都不需要，可手动删除，或重跑卸载并加 --purge-all。"
     return
   fi
 
@@ -235,9 +247,16 @@ remove_or_keep_data_dir() {
     return
   fi
 
+  if [[ "${PURGE_ALL}" -eq 1 ]]; then
+    sudo rm -rf "${DATA_DIR}"
+    echo "已强制删除数据目录：${DATA_DIR}"
+    return
+  fi
+
   if [[ "${STATE_FOUND}" -eq 1 && "${INSTALL_DATA_DIR_CREATED_BY_INSTALLER}" != "1" ]]; then
     remove_known_data_contents
     echo "数据目录安装前已存在，仅清理本项目已知数据文件，保留目录：${DATA_DIR}"
+    echo "如确认整个目录都不需要，可重跑卸载并加 --purge-all。"
     return
   fi
 
@@ -287,6 +306,7 @@ print_summary() {
   echo "  app_dir=${APP_DIR}"
   echo "  data_dir=${DATA_DIR}"
   echo "  keep_data=${KEEP_DATA}"
+  echo "  purge_all=${PURGE_ALL}"
   echo "  service_user=${SERVICE_USER}"
   if [[ "${STATE_FOUND}" -eq 1 ]]; then
     echo "  install_state=${STATE_FILE}"
@@ -298,6 +318,7 @@ print_summary() {
   echo "  - 卸载会调用 sudo 停止/禁用 systemd 服务，删除或恢复 /etc/systemd/system 和 /etc/sudoers.d 中本项目的文件。"
   echo "  - 找到安装清单时，只删除安装器记录为自己创建的目录和用户。"
   echo "  - 使用 --keep-data 时会保留数据目录，并默认保留服务用户，避免保留数据变成无人拥有。"
+  echo "  - 如需忽略“安装前已存在”的保守保护并强制清空目录，请显式加 --purge-all。"
 }
 
 main() {

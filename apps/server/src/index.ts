@@ -383,7 +383,7 @@ function createHealthServer(params: {
       if (method === "GET" && pathname === "/healthz") {
         respondJson(response, 200, {
           ok: true,
-          service: "weixin-household-agent-acp",
+          service: "weixin-household-codex-gateway",
           timezone: params.config.server.timezone,
           startedAt: params.startedAt,
         });
@@ -602,7 +602,7 @@ function createHealthServer(params: {
 
       if (method === "GET" && pathname === "/") {
         respondJson(response, 200, {
-          service: "weixin-household-agent-acp",
+          service: "weixin-household-codex-gateway",
           status: "running",
           time: formatBeijingTime(new Date()),
           endpoints: [
@@ -667,7 +667,7 @@ async function bootstrap(): Promise<void> {
   }
 
   const database = new AppDatabase(
-    path.join(config.server.dataDir, "weixin-household-agent-acp.sqlite"),
+    path.join(config.server.dataDir, "weixin-household-codex-gateway.sqlite"),
   );
   database.initialize();
   const startedAt = new Date().toISOString();

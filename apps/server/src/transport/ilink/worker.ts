@@ -20,9 +20,11 @@ import {
 } from "../../policy/index.js";
 import { resolveRole } from "../../router/index.js";
 import {
+  createNextSession,
   buildPromptContext,
   ensureActiveSession,
   formatBeijingTime,
+  shouldRotateSession,
 } from "../../sessions/index.js";
 import {
   AppDatabase,
@@ -49,6 +51,11 @@ function buildMessageId(prefix: string): string {
 
 interface SessionMemoryState {
   routeMode?: UserRole;
+  turnCount?: number;
+  estimatedTokenCount?: number;
+  carryoverSummary?: string;
+  carryoverSourceSessionId?: string;
+  carryoverSourceLastActiveAt?: string;
   pendingInboundAttachments?: PendingInboundAttachment[];
 }
 
@@ -70,6 +77,22 @@ function parseSessionMemory(memoryJson: string): SessionMemoryState {
     return {
       ...(parsed.routeMode === "admin" || parsed.routeMode === "family"
         ? { routeMode: parsed.routeMode }
+        : {}),
+      ...(typeof parsed.turnCount === "number" && parsed.turnCount >= 0
+        ? { turnCount: parsed.turnCount }
+        : {}),
+      ...(typeof parsed.estimatedTokenCount === "number" &&
+      parsed.estimatedTokenCount >= 0
+        ? { estimatedTokenCount: parsed.estimatedTokenCount }
+        : {}),
+      ...(typeof parsed.carryoverSummary === "string"
+        ? { carryoverSummary: parsed.carryoverSummary }
+        : {}),
+      ...(typeof parsed.carryoverSourceSessionId === "string"
+        ? { carryoverSourceSessionId: parsed.carryoverSourceSessionId }
+        : {}),
+      ...(typeof parsed.carryoverSourceLastActiveAt === "string"
+        ? { carryoverSourceLastActiveAt: parsed.carryoverSourceLastActiveAt }
         : {}),
       ...(Array.isArray(parsed.pendingInboundAttachments)
         ? {
@@ -134,6 +157,218 @@ function stringifySessionMemory(state: SessionMemoryState): string {
   return JSON.stringify(state);
 }
 
+function estimateTextTokens(text: string): number {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return 0;
+  }
+
+  return Math.ceil(trimmed.length / 4);
+}
+
+function formatSessionSnapshot(session: SessionRecord): string {
+  const parts = [
+    `session=${session.id}`,
+    `last=${session.lastActiveAt}`,
+  ];
+  if (session.summaryText.trim()) {
+    parts.push(`summary=${session.summaryText.trim()}`);
+  }
+  return parts.join("\n");
+}
+
+function findPreviousSession(params: {
+  database: AppDatabase;
+  session: SessionRecord;
+}): SessionRecord | undefined {
+  const sessions = params.database.listSessionsByPeer(
+    params.session.wechatAccountId,
+    params.session.contactId,
+    10,
+  );
+  return sessions.find((candidate) => candidate.id !== params.session.id);
+}
+
+function findYesterdaySession(params: {
+  database: AppDatabase;
+  session: SessionRecord;
+}): SessionRecord | undefined {
+  const sessions = params.database.listSessionsByPeer(
+    params.session.wechatAccountId,
+    params.session.contactId,
+    20,
+  );
+  const today = new Date().toLocaleDateString("zh-CN", {
+    timeZone: "Asia/Shanghai",
+  });
+
+  return sessions.find((candidate) => {
+    if (candidate.id === params.session.id) {
+      return false;
+    }
+    const date = new Date(candidate.lastActiveAt);
+    if (Number.isNaN(date.getTime())) {
+      return false;
+    }
+    const candidateDay = date.toLocaleDateString("zh-CN", {
+      timeZone: "Asia/Shanghai",
+    });
+    return candidateDay !== today;
+  });
+}
+
+function isNewBeijingCalendarDay(params: {
+  previousAt: string;
+  now: Date;
+}): boolean {
+  const previous = new Date(params.previousAt);
+  if (Number.isNaN(previous.getTime())) {
+    return false;
+  }
+
+  const previousDay = previous.toLocaleDateString("zh-CN", {
+    timeZone: "Asia/Shanghai",
+  });
+  const currentDay = params.now.toLocaleDateString("zh-CN", {
+    timeZone: "Asia/Shanghai",
+  });
+
+  return previousDay !== currentDay;
+}
+
+function summarizeCarryoverContext(params: {
+  session: SessionRecord;
+  recentMessages: ReturnType<AppDatabase["listSessionMessages"]>;
+}): string {
+  const lines: string[] = [];
+  if (params.session.summaryText.trim()) {
+    lines.push(`上段摘要：${params.session.summaryText.trim()}`);
+  }
+
+  const recent = params.recentMessages
+    .slice(-6)
+    .map((message) => {
+      const speaker = message.direction === "inbound" ? "用户" : "助手";
+      const text = message.textContent?.trim() || "[非文本消息]";
+      return `${speaker}：${text}`;
+    });
+
+  if (recent.length > 0) {
+    lines.push(`上段最近消息：${recent.join(" / ")}`);
+  }
+
+  return lines.join("\n").trim();
+}
+
+function shouldRotateByThresholds(params: {
+  session: SessionRecord;
+  memory: SessionMemoryState;
+  config: AppConfig;
+}): { shouldRotate: boolean; reason: string } {
+  const now = new Date();
+  if (
+    isNewBeijingCalendarDay({
+      previousAt: params.session.lastActiveAt,
+      now,
+    })
+  ) {
+    return {
+      shouldRotate: true,
+      reason: "crossed into a new Beijing calendar day",
+    };
+  }
+
+  const idleDecision = shouldRotateSession({
+    lastActiveAt: params.session.lastActiveAt,
+    now,
+    maxIdleHours: params.config.session.rotateIdleHours,
+  });
+  if (idleDecision.shouldRotate) {
+    return idleDecision;
+  }
+
+  const turnCount = params.memory.turnCount ?? 0;
+  if (turnCount >= params.config.session.rotateMaxTurns) {
+    return {
+      shouldRotate: true,
+      reason: `turn count ${turnCount} >= ${params.config.session.rotateMaxTurns}`,
+    };
+  }
+
+  const estimatedTokenCount = params.memory.estimatedTokenCount ?? 0;
+  if (estimatedTokenCount >= params.config.session.rotateMaxEstimatedTokens) {
+    return {
+      shouldRotate: true,
+      reason: `estimated tokens ${estimatedTokenCount} >= ${params.config.session.rotateMaxEstimatedTokens}`,
+    };
+  }
+
+  return {
+    shouldRotate: false,
+    reason: "session is still warm",
+  };
+}
+
+function buildCrossDayNotice(params: {
+  previousLastActiveAt: string;
+  now: Date;
+}): string | undefined {
+  const previous = new Date(params.previousLastActiveAt);
+  if (Number.isNaN(previous.getTime())) {
+    return undefined;
+  }
+
+  const previousDay = previous.toLocaleDateString("zh-CN", {
+    timeZone: "Asia/Shanghai",
+  });
+  const currentDay = params.now.toLocaleDateString("zh-CN", {
+    timeZone: "Asia/Shanghai",
+  });
+
+  if (previousDay === currentDay) {
+    return undefined;
+  }
+
+  return "前置信息：这是新的一天里的新对话，如有需要可参考上一段对话摘要。";
+}
+
+function shouldAttachPreviousSessionHint(text: string): boolean {
+  return /(上一次|上回|昨天|前天|之前那个|前面的那个)/.test(text);
+}
+
+function buildPreviousSessionHint(params: {
+  database: AppDatabase;
+  session: SessionRecord;
+  userText: string;
+}): string | undefined {
+  if (!shouldAttachPreviousSessionHint(params.userText)) {
+    return undefined;
+  }
+
+  const previous =
+    findYesterdaySession({
+      database: params.database,
+      session: params.session,
+    }) ??
+    findPreviousSession({
+      database: params.database,
+      session: params.session,
+    });
+
+  if (!previous) {
+    return undefined;
+  }
+
+  const lines = [
+    "前置信息：用户这次提到了昨天/上一次，如相关可参考上一段对话信息。",
+    `上一段对话时间：${previous.lastActiveAt}`,
+  ];
+  if (previous.summaryText.trim()) {
+    lines.push(`上一段对话摘要：${previous.summaryText.trim()}`);
+  }
+  return lines.join("\n");
+}
+
 function buildCommandReply(params: {
   command: ParsedCommand;
   session: SessionRecord;
@@ -155,6 +390,8 @@ function buildCommandReply(params: {
             "/time 查看北京时间",
             "/whoami 查看当前账号角色",
             "/mode 查看或切换当前会话模式",
+            "/last 查看上一段对话",
+            "/yesterday 查看昨天的上一段对话",
             "/sessions 查看最近会话",
             "/recent 查看最近几条消息",
             "/summary 查看当前摘要",
@@ -168,6 +405,8 @@ function buildCommandReply(params: {
             "/time 查看北京时间",
             "/whoami 查看当前账号角色",
             "/mode 查看当前会话模式",
+            "/last 查看上一段对话",
+            "/yesterday 查看昨天的上一段对话",
             "/new 或 /reset 重置当前对话上下文",
           ].join("\n");
     case "/whoami":
@@ -229,6 +468,24 @@ function buildCommandReply(params: {
       return params.session.summaryText.trim()
         ? `当前摘要：${params.session.summaryText}`
         : "当前还没有保存摘要。";
+    case "/last": {
+      const previous = findPreviousSession({
+        database: params.database,
+        session: params.session,
+      });
+      return previous
+        ? `上一段对话：\n${formatSessionSnapshot(previous)}`
+        : "当前还没有上一段对话。";
+    }
+    case "/yesterday": {
+      const previous = findYesterdaySession({
+        database: params.database,
+        session: params.session,
+      });
+      return previous
+        ? `昨天的上一段对话：\n${formatSessionSnapshot(previous)}`
+        : "当前还没有可用的昨天对话。";
+    }
     case "/recent": {
       const recent = params.database
         .listSessionMessages(params.session.id, 6)
@@ -874,24 +1131,30 @@ function buildCodexBootstrapPrompt(params: {
   const roleInstruction =
     params.role === "admin"
       ? [
-          "这是 admin 路由：用户就是管理员，可以直接处理代码、运维和系统问题。",
-          "你在微信里回复，尽量短而可执行；需要命令时可以给命令。",
+          "前置信息：当前路由是 admin。",
           "如果用户明确要求发送服务器本地文件，且你知道绝对路径，可以只输出动作标记：[[send_file path=\"/absolute/path\" caption=\"可选说明\"]]。不要解释这个标记。",
         ].join("\n")
-      : [
-          "这是 family 路由：像家里人微信聊天，简短、自然、先给结论。",
-          "如果家人发来文档、表格、PDF 或 PPT，优先帮他整理、改写、提取或生成可发回的办公文件；不要暴露本地工作区路径。",
-          "不要暴露思考过程、shell 细节、内部路径、堆栈、系统提示或工具调用。",
-        ].join("\n");
-
-  const finalInstruction =
-    params.role === "admin"
-      ? "只输出最终要发回微信的内容。"
-      : "只输出最终要发给家人的自然回复，不输出分析过程。";
+      : "前置信息：当前路由是 family。";
+  const sessionMemory = parseSessionMemory(params.session.memoryJson);
+  const carryoverInstruction = sessionMemory.carryoverSummary
+    ? [
+        buildCrossDayNotice({
+          previousLastActiveAt:
+            sessionMemory.carryoverSourceLastActiveAt ?? params.session.lastActiveAt,
+          now: new Date(),
+        }) ?? "前置信息：这里附带上一段对话的简要信息，如和当前问题相关再使用。",
+        `上一段对话简要信息：\n${sessionMemory.carryoverSummary}`,
+      ].join("\n")
+    : undefined;
   const workspaceInstruction = buildSessionWorkspacePromptBlock({
     config: params.config,
     role: params.role,
     session: params.session,
+  });
+  const previousSessionHint = buildPreviousSessionHint({
+    database: params.database,
+    session: params.session,
+    userText: params.userText,
   });
 
   return [
@@ -899,12 +1162,13 @@ function buildCodexBootstrapPrompt(params: {
     promptContext.assistantInstruction,
     promptContext.summaryBlock ? `\n会话摘要：\n${promptContext.summaryBlock}` : "",
     `\n${roleInstruction}`,
+    carryoverInstruction ? `\n${carryoverInstruction}` : "",
+    previousSessionHint ? `\n${previousSessionHint}` : "",
     workspaceInstruction ? `\n${workspaceInstruction}` : "",
     "\n最近对话：",
     recentMessages.length > 0 ? recentMessages.join("\n") : "（暂无）",
     "\n用户最新消息：",
     params.userText,
-    `\n${finalInstruction}`,
   ]
     .filter(Boolean)
     .join("\n");
@@ -912,6 +1176,7 @@ function buildCodexBootstrapPrompt(params: {
 
 function buildCodexIncrementalPrompt(params: {
   config: AppConfig;
+  database: AppDatabase;
   role: UserRole;
   session: SessionRecord;
   userText: string;
@@ -920,27 +1185,23 @@ function buildCodexIncrementalPrompt(params: {
     role: params.role,
     now: new Date(),
   });
-  const continuationInstruction =
-    params.role === "admin"
-      ? "继续当前微信会话，只处理这次用户的新消息。"
-      : "继续当前微信对话，只回复这次家人的新消息。";
-  const finalInstruction =
-    params.role === "admin"
-      ? "只输出最终要发回微信的内容。"
-      : "只输出最终要发给家人的自然回复，不输出分析过程。";
   const workspaceInstruction = buildSessionWorkspacePromptBlock({
     config: params.config,
     role: params.role,
     session: params.session,
   });
+  const previousSessionHint = buildPreviousSessionHint({
+    database: params.database,
+    session: params.session,
+    userText: params.userText,
+  });
 
   return [
     promptContext.currentTimeText,
-    continuationInstruction,
+    previousSessionHint ? `\n${previousSessionHint}` : "",
     workspaceInstruction ? `\n${workspaceInstruction}` : "",
     "\n用户最新消息：",
     params.userText,
-    `\n${finalInstruction}`,
   ]
     .filter(Boolean)
     .join("\n");
@@ -960,6 +1221,7 @@ async function buildCodexReply(params: {
   const prompt = params.persistentContext
     ? buildCodexIncrementalPrompt({
         config: params.config,
+        database: params.database,
         role: params.role,
         session: params.session,
         userText: params.userText,
@@ -1292,15 +1554,47 @@ export class WechatWorker {
       existingSessionMemory.routeMode === "family"
         ? { role: existingSessionMemory.routeMode }
         : { role: accountRoute.role };
+    const carryoverSummary = summarizeCarryoverContext({
+      session,
+      recentMessages: this.options.database
+        .listSessionMessages(session.id, 12)
+        .reverse(),
+    });
+    const rotateDecision = shouldRotateByThresholds({
+      session,
+      memory: existingSessionMemory,
+      config: this.options.config,
+    });
+    const sessionForTurn = rotateDecision.shouldRotate
+      ? createNextSession({
+          database: this.options.database,
+          previousSession: session,
+          role: route.role,
+          memoryJson: stringifySessionMemory({
+            ...(existingSessionMemory.routeMode
+              ? { routeMode: existingSessionMemory.routeMode }
+              : {}),
+            ...(carryoverSummary
+              ? {
+                  carryoverSummary,
+                  carryoverSourceSessionId: session.id,
+                  carryoverSourceLastActiveAt: session.lastActiveAt,
+                }
+              : {}),
+          }),
+          contextToken: inbound.contextToken,
+          lastActiveAt: inbound.receivedAt,
+        })
+      : session;
 
     const activeSession = this.options.database.saveSession({
-      id: session.id,
-      wechatAccountId: session.wechatAccountId,
-      contactId: session.contactId,
+      id: sessionForTurn.id,
+      wechatAccountId: sessionForTurn.wechatAccountId,
+      contactId: sessionForTurn.contactId,
       role: route.role,
-      status: session.status,
-      summaryText: session.summaryText,
-      memoryJson: session.memoryJson,
+      status: sessionForTurn.status,
+      summaryText: sessionForTurn.summaryText,
+      memoryJson: sessionForTurn.memoryJson,
       contextToken: inbound.contextToken,
       lastActiveAt: inbound.receivedAt,
     });
@@ -1335,6 +1629,10 @@ export class WechatWorker {
     if (downloadedAttachments.length > 0 && !inbound.text.trim()) {
       const nextMemory = stringifySessionMemory({
         ...sessionMemory,
+        turnCount: (sessionMemory.turnCount ?? 0) + 1,
+        estimatedTokenCount:
+          (sessionMemory.estimatedTokenCount ?? 0) +
+          estimateTextTokens([inbound.mediaSummary, inbound.text].filter(Boolean).join("\n")),
         pendingInboundAttachments: [
           ...(sessionMemory.pendingInboundAttachments ?? []),
           ...downloadedAttachments,
@@ -1397,6 +1695,10 @@ export class WechatWorker {
             summaryText: activeSession.summaryText,
             memoryJson: stringifySessionMemory({
               ...sessionMemory,
+              turnCount: (sessionMemory.turnCount ?? 0) + 1,
+              estimatedTokenCount:
+                (sessionMemory.estimatedTokenCount ?? 0) +
+                estimateTextTokens(userTextForCodex),
               pendingInboundAttachments: [],
             }),
             contextToken: activeSession.contextToken,
@@ -1530,6 +1832,29 @@ export class WechatWorker {
       textContent: replyText,
       createdAt: new Date().toISOString(),
       sourceMessageId: lastClientId || inbound.sourceMessageId,
+    });
+    const latestMemory = parseSessionMemory(sessionForReply.memoryJson);
+    this.options.database.saveSession({
+      id: sessionForReply.id,
+      wechatAccountId: sessionForReply.wechatAccountId,
+      contactId: sessionForReply.contactId,
+      role: route.role,
+      status: sessionForReply.status,
+      summaryText: sessionForReply.summaryText,
+      memoryJson: stringifySessionMemory({
+        ...latestMemory,
+        turnCount:
+          Math.max(latestMemory.turnCount ?? 0, sessionMemory.turnCount ?? 0) + 1,
+        estimatedTokenCount:
+          Math.max(
+            latestMemory.estimatedTokenCount ?? 0,
+            sessionMemory.estimatedTokenCount ?? 0,
+          ) +
+          estimateTextTokens(userTextForCodex) +
+          estimateTextTokens(replyText),
+      }),
+      contextToken: sessionForReply.contextToken,
+      lastActiveAt: new Date().toISOString(),
     });
   }
 }

@@ -13,8 +13,5 @@ export function formatBeijingTime(date: Date): string {
 }
 
 export function buildCurrentTimeInstruction(now: Date): string {
-  return [
-    `\u73b0\u5728\u662f\u5317\u4eac\u65f6\u95f4 ${formatBeijingTime(now)}\u3002`,
-    "\u7528\u6237\u8bf4\u4eca\u5929\u3001\u660e\u5929\u3001\u6628\u5929\u3001\u4e0a\u5348\u3001\u4e0b\u5348\u3001\u665a\u4e0a\u65f6\uff0c\u90fd\u6309\u8fd9\u4e2a\u65f6\u95f4\u7406\u89e3\u3002",
-  ].join("\n");
+  return `\u524d\u7f6e\u4fe1\u606f\uff1a\u6b64\u6d88\u606f\u662f\u7528\u6237\u5728\u3010\u5317\u4eac\u65f6\u95f4 ${formatBeijingTime(now)}\u3011\u548c\u4f60\u5bf9\u8bdd\u7684\uff1a`;
 }

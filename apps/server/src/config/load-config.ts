@@ -327,7 +327,7 @@ export function loadConfig(): AppConfig {
       ),
       channelVersion: readEnv(
         "WECHAT_CHANNEL_VERSION",
-        "weixin-household-agent-acp-0.1.0",
+        "weixin-household-codex-gateway-0.1.0",
       ),
       ...(routeTag ? { routeTag } : {}),
       typingRefreshMs: readNonNegativeInteger("WECHAT_TYPING_REFRESH_MS", 7_000),
@@ -336,6 +336,14 @@ export function loadConfig(): AppConfig {
         30_000,
       ),
       replyChunkChars: readNonNegativeInteger("WECHAT_REPLY_CHUNK_CHARS", 1800),
+    },
+    session: {
+      rotateIdleHours: readPositiveInteger("SESSION_ROTATE_IDLE_HOURS", 24),
+      rotateMaxTurns: readPositiveInteger("SESSION_ROTATE_MAX_TURNS", 50),
+      rotateMaxEstimatedTokens: readPositiveInteger(
+        "SESSION_ROTATE_MAX_ESTIMATED_TOKENS",
+        256_000,
+      ),
     },
     codex: {
       admin: {
