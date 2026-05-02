@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SERVICE_NAME="weixin-household-gateway"
-REPO_URL="${REPO_URL:-https://github.com/thekfjie/weixin-household-gateway.git}"
+REPO_URL="${REPO_URL:-https://github.com/thekfjie/weixin-household-agent-acp.git}"
 BRANCH="${BRANCH:-main}"
 APP_DIR="${APP_DIR:-/opt/weixin-household-gateway}"
 DATA_DIR="${DATA_DIR:-/var/lib/weixin-household-gateway}"
@@ -29,7 +29,7 @@ usage() {
   LOGIN_ROLE=${LOGIN_ROLE}
 
 示例：
-  curl -fsSL https://raw.githubusercontent.com/thekfjie/weixin-household-gateway/main/infra/scripts/linux/bootstrap.sh | LOGIN_ROLE=admin PORT=18080 bash
+  curl -fsSL https://raw.githubusercontent.com/thekfjie/weixin-household-agent-acp/main/infra/scripts/linux/bootstrap.sh | LOGIN_ROLE=admin PORT=18080 bash
 EOF
 }
 

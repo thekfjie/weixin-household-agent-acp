@@ -2,6 +2,12 @@
 
 家庭共享微信 AI 网关：家里人直接在微信里聊天，你保留 `admin` 高权限身份。服务长期运行在 Linux 服务器上，统一按北京时间理解上下文。
 
+当前产品名已经调整为 `weixin-household-gateway`，但 GitHub 仓库地址暂时仍是：
+
+```text
+https://github.com/thekfjie/weixin-household-agent-acp
+```
+
 ## 部署和使用
 
 ### 1. 一键安装
@@ -9,7 +15,7 @@
 用普通登录用户 SSH 到服务器，不要 `sudo su -`：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/thekfjie/weixin-household-gateway/main/infra/scripts/linux/bootstrap.sh | bash
+curl -fsSL https://raw.githubusercontent.com/thekfjie/weixin-household-agent-acp/main/infra/scripts/linux/bootstrap.sh | bash
 ```
 
 脚本会拉代码到 `/opt/weixin-household-gateway`，先检测系统环境；缺少 `git`、`sudo`、`Node.js 22 LTS` 等基础依赖时会询问是否补装。随后安装依赖、构建、写入 `.env` 和 systemd 服务。首次没有微信账号时会停在终端二维码，扫码确认后继续启动。
@@ -66,7 +72,7 @@ CODEX_FAMILY_BACKEND=acp
 如果你想在安装时一次性带上这些值，也可以直接：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/thekfjie/weixin-household-gateway/main/infra/scripts/linux/bootstrap.sh | \
+curl -fsSL https://raw.githubusercontent.com/thekfjie/weixin-household-agent-acp/main/infra/scripts/linux/bootstrap.sh | \
 CODEX_CLI_AUTH_MODE=api_key \
 CODEX_CLI_BASE_URL=https://你的第三方兼容服务/v1 \
 CODEX_CLI_API_KEY=sk-... \
