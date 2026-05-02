@@ -166,7 +166,11 @@ function estimateTextTokens(text: string): number {
   return Math.ceil(trimmed.length / 4);
 }
 
-function formatSessionSnapshot(session: SessionRecord): string {
+function formatSessionSnapshot(params: {
+  session: SessionRecord;
+  database: AppDatabase;
+}): string {
+  const session = params.session;
   const parts = [
     `session=${session.id}`,
     `last=${session.lastActiveAt}`,
@@ -175,6 +179,12 @@ function formatSessionSnapshot(session: SessionRecord): string {
     parts.push(`summary=${session.summaryText.trim()}`);
   } else {
     parts.push("summary=(无)");
+  }
+  const recentInline = summarizeRecentMessagesInline(
+    params.database.listSessionMessages(session.id, 4).reverse(),
+  );
+  if (recentInline) {
+    parts.push(`recent=${recentInline}`);
   }
   return parts.join("\n");
 }
@@ -598,7 +608,10 @@ function buildCommandReply(params: {
         session: params.session,
       });
       return previous
-        ? `上一段对话：\n${formatSessionSnapshot(previous)}`
+        ? `上一段对话：\n${formatSessionSnapshot({
+            session: previous,
+            database: params.database,
+          })}`
         : "当前还没有上一段对话。";
     }
     case "/yesterday": {
@@ -607,7 +620,10 @@ function buildCommandReply(params: {
         session: params.session,
       });
       return previous
-        ? `昨天的上一段对话：\n${formatSessionSnapshot(previous)}`
+        ? `昨天的上一段对话：\n${formatSessionSnapshot({
+            session: previous,
+            database: params.database,
+          })}`
         : "当前还没有可用的昨天对话。";
     }
     case "/recent": {
